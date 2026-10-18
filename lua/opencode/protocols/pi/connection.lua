@@ -2,6 +2,7 @@ local Promise = require('opencode.promise')
 local OpencodeServer = require('opencode.opencode_server')
 local process = require('opencode.protocols.pi.process')
 local registry = require('opencode.protocols.registry')
+local ui_requests = require('opencode.protocols.pi.ui_requests')
 
 ---@type OpencodeProtocolAdapter
 local M = {
@@ -31,7 +32,13 @@ function M.start_server()
     connection.protocol = 'pi'
     connection.server_identity = { version = 'pi' }
     connection.pi = { session_id = pi_state.sessionId }
+    local unsubscribe = process.on_event(function(event)
+      if event.type == 'extension_ui_request' then
+        ui_requests.dispatch(connection, event)
+      end
+    end)
     connection:set_process_release(function()
+      unsubscribe()
       client.process:stop()
     end)
     return connection:mark_ready()

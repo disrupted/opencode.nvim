@@ -127,6 +127,11 @@ end
 
 local function handle(command)
   append_log(command)
+  if command.type == 'extension_ui_response' then
+    -- Like pi, dialog answers get no response; scripts can still react to them.
+    run(steps_for(command))
+    return
+  end
   if script.silent and script.silent[command.type] then
     return
   end

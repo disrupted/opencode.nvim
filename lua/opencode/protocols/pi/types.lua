@@ -53,7 +53,8 @@
 ---@field get_messages fun(self: OpencodePiClient): Promise<{messages: OpencodePiMessage[]}>
 ---@field switch_session fun(self: OpencodePiClient, path: string): Promise<{cancelled?: boolean}>
 ---@field new_session fun(self: OpencodePiClient): Promise<{cancelled?: boolean}>
----@field prompt fun(self: OpencodePiClient, message: string): Promise<any>
+---@field prompt fun(self: OpencodePiClient, message: string, behavior?: 'steer'|'followUp'|false): Promise<any>
+---@field extension_ui_response fun(self: OpencodePiClient, reply: {id: string, value?: string, confirmed?: boolean, cancelled?: boolean}): Promise<boolean>
 ---@field abort fun(self: OpencodePiClient): Promise<any>
 ---@field get_available_models fun(self: OpencodePiClient): Promise<{models: OpencodePiModel[]}>
 ---@field set_model fun(self: OpencodePiClient, provider: string, model_id: string): Promise<OpencodePiModel>
@@ -72,6 +73,9 @@
 ---@field pi {session_id?: string} Pi runs one active session; it is tracked here because switching is a process command
 
 ---@alias OpencodePiLocationListOperation fun(connection: OpencodePiConnection, location: OpencodeLocation, path_map?: OpencodeV2PathMap, reverse_path_map?: OpencodeV2PathMap): Promise<table[]>
+
+---@class OpencodePiSubmitInput: OpencodeV2SubmitInput
+---@field delivery? 'steer'|'follow_up' How to queue the prompt while a run is active; defaults to steer
 
 ---@class OpencodePiOperations
 ---@field get_current_project fun(connection: OpencodePiConnection, location: OpencodeLocation, path_map?: OpencodeV2PathMap, reverse_path_map?: OpencodeV2PathMap): Promise<table>
@@ -101,7 +105,7 @@
 ---@field cycle_thinking_level fun(connection: OpencodePiConnection): Promise<string>
 ---@field cycle_model fun(connection: OpencodePiConnection): Promise<OpencodeV2ModelReference>
 ---@field send_command fun(connection: OpencodePiConnection, session_id: string, location: OpencodeLocation?, input: OpencodeV2CommandInput): Promise<boolean>
----@field submit fun(connection: OpencodePiConnection, session_id: string, input: OpencodeV2SubmitInput, path_map?: OpencodeV2PathMap, reverse_path_map?: OpencodeV2PathMap): Promise<OpencodeV2Admission>
+---@field submit fun(connection: OpencodePiConnection, session_id: string, input: OpencodePiSubmitInput, path_map?: OpencodeV2PathMap, reverse_path_map?: OpencodeV2PathMap): Promise<OpencodeV2Admission>
 ---@field interrupt fun(connection: OpencodePiConnection, session_id: string): Promise<boolean>
 ---@field activate_skill fun(connection: OpencodePiConnection, session_id: string, skill_id: string): Promise<boolean>
 ---@field list_permissions OpencodePiLocationListOperation

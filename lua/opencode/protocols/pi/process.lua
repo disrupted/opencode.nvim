@@ -242,13 +242,21 @@ function Client:new_session()
   return self:request({ type = 'new_session' })
 end
 
-function Client:prompt(message)
+---@param message string
+---@param behavior? 'steer'|'followUp'|false How to queue during a run; false sends it as a plain prompt, nil follows the observed run state
+function Client:prompt(message, behavior)
+  if behavior == nil and self.streaming then
+    behavior = 'steer'
+  end
   -- pi rejects a prompt during a run unless it says how to queue it.
-  return self:request({
-    type = 'prompt',
-    message = message,
-    streamingBehavior = self.streaming and 'steer' or nil,
-  })
+  return self:request({ type = 'prompt', message = message, streamingBehavior = behavior or nil })
+end
+
+---Answers a dialog; pi sends no response to it, so nothing is awaited.
+---@param reply {id: string, value?: string, confirmed?: boolean, cancelled?: boolean}
+---@return Promise<boolean>
+function Client:extension_ui_response(reply)
+  return self.process:send(vim.tbl_extend('force', { type = 'extension_ui_response' }, reply))
 end
 
 function Client:abort()

@@ -144,6 +144,7 @@ local action_groups = {
     configure_provider = agent.configure_provider,
     configure_variant = agent.configure_variant,
     cycle_variant = agent.cycle_variant,
+    cycle_model = agent.cycle_model,
     agent_plan = agent.agent_plan,
     agent_build = agent.agent_build,
     select_agent = agent.select_agent,

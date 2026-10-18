@@ -57,9 +57,11 @@ end
 ---Pi has one live session; operating on another requires switching the process to it.
 ---@param connection OpencodePiConnection
 ---@param session_id string
+---@return OpencodePiState
 local function ensure_active(connection, session_id)
-  if current_state(connection).sessionId == session_id then
-    return
+  local pi_state = current_state(connection)
+  if pi_state.sessionId == session_id then
+    return pi_state
   end
   local fact = stored_session(session_id)
   if not fact then
@@ -70,6 +72,7 @@ local function ensure_active(connection, session_id)
     error('Pi refused to switch session', 0)
   end
   connection.pi.session_id = session_id
+  return current_state(connection)
 end
 
 ---A crashed pi is only restarted by operations that start new work, and says so; everything else fails.
@@ -164,10 +167,15 @@ end
 
 M.submit = Promise.async(function(connection, session_id, input)
   revive():await()
-  ensure_active(connection, session_id)
+  local pi_state = ensure_active(connection, session_id)
   local model = input.model
   apply_selection(model and model.providerID, model and model.modelID, input.variant)
-  process.get():prompt(prompt_text(input)):await()
+  ---@type 'steer'|'followUp'|false
+  local behavior = false
+  if pi_state.isStreaming then
+    behavior = input.delivery == 'follow_up' and 'followUp' or 'steer'
+  end
+  process.get():prompt(prompt_text(input), behavior):await()
   return { id = input.id or id.ascending('message') }
 end)
 
@@ -399,6 +407,33 @@ for name, produce in pairs(empty) do
   end
 end
 
+---Dialogs are answered by id on the live process; there is no per-session routing in pi.
+---@param request_id string
+---@param reply {value?: string, confirmed?: boolean, cancelled?: boolean}
+---@return Promise<boolean>
+local function answer_dialog(request_id, reply)
+  return process.get():extension_ui_response({
+    id = request_id,
+    value = reply.value,
+    confirmed = reply.confirmed,
+    cancelled = reply.cancelled,
+  })
+end
+
+function M.reply_permission(_, _, request_id, answer)
+  return answer_dialog(request_id, { confirmed = answer.reply ~= 'reject' })
+end
+
+function M.reply_question(_, _, request_id, answers)
+  return answer_dialog(request_id, {
+    value = answers.value --[[@as string]],
+  })
+end
+
+function M.cancel_question(_, _, request_id)
+  return answer_dialog(request_id, { cancelled = true })
+end
+
 for _, name in ipairs({
   'delete_session',
   'revert_message',
@@ -406,9 +441,6 @@ for _, name in ipairs({
   'diff_session',
   'set_session_agent',
   'activate_skill',
-  'reply_permission',
-  'reply_question',
-  'cancel_question',
   'connect_mcp',
   'disconnect_mcp',
 }) do

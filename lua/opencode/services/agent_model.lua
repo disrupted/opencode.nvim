@@ -4,6 +4,8 @@ local util = require('opencode.util')
 local Promise = require('opencode.promise')
 local log = require('opencode.log')
 local session_tabs = require('opencode.state.session_tabs')
+local config = require('opencode.config')
+local server_job = require('opencode.server_job')
 
 local M = {}
 
@@ -58,7 +60,20 @@ function M.set_variant(variant)
   end
 end
 
+---Pi owns the thinking level and the model order, so it picks the next one; the selection is only mirrored here.
 M.cycle_variant = Promise.async(function()
+  if config.backend == 'pi' then
+    local connection = server_job.ensure_server():await()
+    local ok, level = pcall(function()
+      return connection.operations.cycle_thinking_level(connection):await()
+    end)
+    if not ok then
+      log.notify(tostring(level), vim.log.levels.WARN)
+      return
+    end
+    state.model.set_variant(level)
+    return
+  end
   if not state.current_model then
     log.notify('No model selected', vim.log.levels.WARN)
     return
@@ -110,6 +125,24 @@ M.cycle_variant = Promise.async(function()
   end
 
   M.set_variant(next_variant)
+end)
+
+---Cycle to the next model the backend offers.
+M.cycle_model = Promise.async(function()
+  if config.backend ~= 'pi' then
+    log.notify('Cycling models is only supported by the Pi backend', vim.log.levels.WARN)
+    return
+  end
+  local connection = server_job.ensure_server():await()
+  local ok, selected = pcall(function()
+    return connection.operations.cycle_model(connection):await()
+  end)
+  if not ok then
+    log.notify(tostring(selected), vim.log.levels.WARN)
+    return
+  end
+  state.model.set_model(string.format('%s/%s', selected.providerID, selected.id))
+  state.model.set_variant(selected.variant)
 end)
 
 --- Apply mode and resolve its associated model from config.
