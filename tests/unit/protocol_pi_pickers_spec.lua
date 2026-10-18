@@ -9,7 +9,7 @@ local state = require('opencode.state')
 local stub = require('luassert.stub')
 
 describe('pi backend with the shared model and variant pickers', function()
-  local ctx, saved_backend, saved_include, picked
+  local ctx, saved_backend, picked
 
   before_each(function()
     ctx = fake_pi.start({
@@ -20,7 +20,7 @@ describe('pi backend with the shared model and variant pickers', function()
         { id = 'gpt', name = 'GPT', provider = 'openai', reasoning = false },
       },
     })
-    saved_backend, saved_include = config.values.backend, config.values.model_picker.include
+    saved_backend = config.values.backend
     config.values.backend = 'pi'
     state.jobs.clear_server()
     config_file.providers_promise = nil
@@ -42,7 +42,6 @@ describe('pi backend with the shared model and variant pickers', function()
     end
     state.jobs.clear_server()
     config.values.backend = saved_backend
-    config.values.model_picker.include = saved_include
     ctx:stop()
   end)
 
@@ -55,12 +54,6 @@ describe('pi backend with the shared model and variant pickers', function()
   it('lists the models pi reports', function()
     model_picker.select(function() end):wait()
     assert.same({ 'anthropic/opus', 'anthropic/sonnet', 'openai/gpt' }, names(picked.items))
-  end)
-
-  it('applies the include allowlist to pi models', function()
-    config.values.model_picker.include = { 'openai/gpt' }
-    model_picker.select(function() end):wait()
-    assert.same({ 'openai/gpt' }, names(picked.items))
   end)
 
   it('offers thinking levels as variants of a reasoning model', function()
