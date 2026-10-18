@@ -206,4 +206,29 @@ describe('pi sessions', function()
       assert.equals(5, messages[2].timestamp)
     end)
   end)
+
+  describe('ordering', function()
+    local function fact(id, updated, path)
+      return { id = id, time = { updated = updated, created = 0 }, path = path }
+    end
+
+    it('breaks equal timestamps by id, then path', function()
+      assert.is_true(sessions.is_newer(fact('a', 6, 'x'), fact('b', 5, 'x')))
+      assert.is_true(sessions.is_newer(fact('a', 5, 'x'), fact('b', 5, 'x')))
+      assert.is_false(sessions.is_newer(fact('b', 5, 'x'), fact('a', 5, 'x')))
+      assert.is_true(sessions.is_newer(fact('a', 5, 'x'), fact('a', 5, 'y')))
+      assert.is_false(sessions.is_newer(fact('a', 5, 'x'), fact('a', 5, 'x')))
+    end)
+
+    it('lists sessions with identical mtimes in a stable order', function()
+      for _, name in ipairs({ 'c', 'a', 'b' }) do
+        local path = ctx:write_session(name .. '.jsonl', { id = name, cwd = '/w' }, { user(name) })
+        touch(path, 1000)
+      end
+      local ids = vim.tbl_map(function(session)
+        return session.id
+      end, sessions.list())
+      assert.same({ 'a', 'b', 'c' }, ids)
+    end)
+  end)
 end)

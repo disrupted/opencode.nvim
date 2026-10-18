@@ -64,4 +64,25 @@ describe('pi normalize', function()
     assert.equals('completed', part.state)
     assert.equals('done', part.result[1].text)
   end)
+
+  describe('message ids', function()
+    it('keys a finished assistant message by its responseId', function()
+      local assistant = { role = 'assistant', timestamp = 2, responseId = 'resp/1', content = {} }
+      local entry = normalize.entry(assistant, 's', 5)
+      assert.equals('pi_assistant_resp_1', entry.id)
+    end)
+
+    it('does not let a responseId change the id of a live snapshot that pins one', function()
+      local assistant = { role = 'assistant', timestamp = 2, responseId = 'r', content = {} }
+      assert.equals('pinned', normalize.entry(assistant, 's', 1, 'pinned').id)
+    end)
+
+    it('falls back to the timestamp without a responseId and never uses it for users', function()
+      assert.equals('pi_assistant_2', normalize.entry({ role = 'assistant', timestamp = 2, content = {} }, 's', 1).id)
+      assert.equals(
+        'pi_user_2',
+        normalize.entry({ role = 'user', timestamp = 2, responseId = 'x', content = {} }, 's', 1).id
+      )
+    end)
+  end)
 end)

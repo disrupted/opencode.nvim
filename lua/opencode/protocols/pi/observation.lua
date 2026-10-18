@@ -15,6 +15,7 @@ local UNSUPPORTED = 'Pi has no equivalent'
 ---@field _pi_pending_inputs string[] Input ids awaiting the user message pi echoes back
 ---@field _pi_admissions table<string, fun(value?: table, err?: string)>
 ---@field _pi_live table<string, string> Entry id of the message currently streaming, per role; pi snapshots carry no id
+---@field _pi_notices table[] Run notices (retry, compaction, extension errors) that are not part of pi's transcript
 ---@field _pi_stop? {reason?: string, message?: string} How the latest assistant message ended
 ---@field submit fun(self: OpencodePiObservation, input: OpencodeV2SubmitInput, selected?: table, on_input_id?: fun(id: string)): Promise<OpencodeSubmission>
 ---@field interrupt fun(self: OpencodePiObservation): Promise<boolean>
@@ -41,6 +42,10 @@ local function apply_messages(observation, messages)
   for _, entry in ipairs(normalize.entries(messages, observation._session_id)) do
     by_id[entry.id] = entries.replace(state.entries_by_id[entry.id], entry)
     order[#order + 1] = entry.id
+  end
+  for _, notice in ipairs(observation._pi_notices) do
+    by_id[notice.id] = notice
+    order[#order + 1] = notice.id
   end
   state.entries_by_id, state.entry_order = by_id, order
 end
@@ -141,6 +146,7 @@ end
 local function set_activity(observation, outcome, err)
   local execution = observation:read().execution
   execution.activity = outcome and 'idle' or 'running'
+  execution.retry = nil
   if outcome then
     execution.last_outcome, execution.error, execution.last_idle = outcome, err, vim.uv.now()
   end
@@ -160,11 +166,93 @@ local function finish_run(observation, outcome, err)
   end
 end
 
+---@param observation OpencodePiObservation
+---@param text string
+local function add_notice(observation, text)
+  local entry = {
+    id = id.ascending('message'),
+    session_id = observation._session_id,
+    kind = 'assistant',
+    agent = 'pi',
+    time = { created = vim.uv.now() },
+    content = { { kind = 'text', text = text } },
+  }
+  normalize.assign_content_ids(entry)
+  observation._pi_notices[#observation._pi_notices + 1] = entry
+  put_entry(observation, entry)
+  observation:_event_changed('messages')
+end
+
+---@param observation OpencodePiObservation
+---@param retry {attempt?: integer, message?: string, scheduled_at?: number}
+local function set_retrying(observation, retry)
+  local execution = observation:read().execution
+  execution.activity = 'retrying'
+  execution.retry = vim.tbl_extend('force', execution.retry or {}, retry)
+  observation:_event_changed('execution')
+end
+
+---@param event table `compaction_end`
+---@return string
+local function compaction_text(event)
+  if event.errorMessage then
+    return 'Compaction failed: ' .. event.errorMessage
+  end
+  if event.aborted then
+    return 'Compaction aborted'
+  end
+  local summary = event.result and event.result.summary
+  return summary and ('Compaction complete\n\n' .. summary) or 'Compaction complete'
+end
+
 ---@type table<string, (fun(observation: OpencodePiObservation, event: table))?>
 local handlers = {
   agent_start = function(observation)
     observation._pi_stop = nil
     set_activity(observation)
+  end,
+  agent_end = function(observation, event)
+    if event.willRetry then
+      set_retrying(observation, {})
+    end
+  end,
+  auto_retry_start = function(observation, event)
+    set_retrying(observation, {
+      attempt = event.attempt,
+      message = event.errorMessage,
+      scheduled_at = event.delayMs and (vim.uv.now() + event.delayMs) or nil,
+    })
+  end,
+  auto_retry_end = function(observation, event)
+    if event.success then
+      set_activity(observation)
+      return
+    end
+    local message = 'Pi retry failed: ' .. tostring(event.finalError or 'unknown error')
+    observation._pi_stop = { reason = 'error', message = message }
+    add_notice(observation, message)
+  end,
+  compaction_start = function(observation, event)
+    if event.reason == 'manual' then
+      set_activity(observation)
+    end
+  end,
+  compaction_end = function(observation, event)
+    local failed = event.errorMessage ~= nil
+    add_notice(observation, compaction_text(event))
+    if not failed and not event.aborted then
+      observation:_start_resource('messages')
+    end
+    if event.willRetry then
+      set_retrying(observation, {})
+    elseif event.reason == 'manual' then
+      local outcome = failed and 'failed' or (event.aborted and 'interrupted' or 'succeeded')
+      set_activity(observation, outcome, failed and { message = event.errorMessage } or nil)
+    end
+  end,
+  extension_error = function(observation, event)
+    local where = event.extensionPath and (' (' .. event.extensionPath .. ')') or ''
+    add_notice(observation, 'Pi extension error' .. where .. ': ' .. tostring(event.error or 'unknown error'))
   end,
   agent_settled = function(observation)
     local stop = observation._pi_stop
@@ -290,6 +378,7 @@ function M.new(connection, ref)
   observation._pi_pending_inputs = {}
   observation._pi_admissions = {}
   observation._pi_live = {}
+  observation._pi_notices = {}
   attach_actions(observation)
   return observation
 end

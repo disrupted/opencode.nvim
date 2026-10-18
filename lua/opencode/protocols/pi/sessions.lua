@@ -79,6 +79,20 @@ local function read_session(path)
   }
 end
 
+---Equal timestamps (coarse mtimes, forks written together) fall back to id, then path, so order never depends on glob or hash order.
+---@param a OpencodePiSessionFact
+---@param b OpencodePiSessionFact
+---@return boolean
+function M.is_newer(a, b)
+  if a.time.updated ~= b.time.updated then
+    return a.time.updated > b.time.updated
+  end
+  if a.id ~= b.id then
+    return a.id < b.id
+  end
+  return a.path < b.path
+end
+
 ---Newest first; one fact per session id, because a forked file repeats its parent's header id.
 ---@return OpencodePiSessionFact[]
 function M.list()
@@ -91,15 +105,13 @@ function M.list()
   for _, path in ipairs(vim.fn.glob(vim.fs.joinpath(root, '**', '*.jsonl'), false, true)) do
     local session = read_session(vim.fs.normalize(path))
     local existing = session and by_id[session.id]
-    if session and (not existing or session.time.updated > existing.time.updated) then
+    if session and (not existing or M.is_newer(session, existing)) then
       by_id[session.id] = session
     end
   end
 
   local sessions = vim.tbl_values(by_id)
-  table.sort(sessions, function(a, b)
-    return a.time.updated > b.time.updated
-  end)
+  table.sort(sessions, M.is_newer)
   return sessions
 end
 

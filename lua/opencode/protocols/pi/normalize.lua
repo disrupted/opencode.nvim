@@ -18,7 +18,10 @@ end
 ---@param index integer
 ---@return string
 function M.message_id(role, message, index)
-  -- responseId only appears once a message is complete, so it cannot key live updates.
+  -- responseId only appears once a message is complete, so live updates keep the id pinned at message start.
+  if role == 'assistant' and type(message.responseId) == 'string' and message.responseId ~= '' then
+    return ('pi_%s_%s'):format(role, message.responseId:gsub('[^%w_%-]', '_'))
+  end
   local stamp = message.timestamp or ('i' .. index)
   return ('pi_%s_%s'):format(role, tostring(stamp):gsub('[^%w_%-]', '_'))
 end
