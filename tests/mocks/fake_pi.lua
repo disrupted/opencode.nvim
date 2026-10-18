@@ -45,6 +45,25 @@ local state = vim.tbl_extend('force', { sessionId = 'fake-session', isStreaming 
 local messages = vim.deepcopy(script.messages or {})
 local counts = {}
 local new_sessions = 0
+local models = script.models or {}
+---@type string[]
+local thinking_levels = { 'off', 'minimal', 'low', 'medium', 'high', 'xhigh' }
+
+local function find_model(provider, id)
+  for _, model in ipairs(models) do
+    if model.provider == provider and model.id == id then
+      return model
+    end
+  end
+end
+
+local function index_of(list, predicate)
+  for i, item in ipairs(list) do
+    if predicate(item) then
+      return i
+    end
+  end
+end
 
 append_log({ argv = arg })
 
@@ -136,6 +155,53 @@ local function handle(command)
       data = { cancelled = false }
     elseif command.type == 'prompt' or command.type == 'abort' then
       data = nil
+    elseif command.type == 'get_available_models' then
+      data = { models = models }
+    elseif command.type == 'set_model' then
+      local model = find_model(command.provider, command.modelId)
+      if model then
+        state.model, data = model, model
+      else
+        failure = 'unknown model: ' .. tostring(command.modelId)
+      end
+    elseif command.type == 'cycle_model' then
+      -- With a single model pi answers with no data at all.
+      if #models > 1 then
+        local current = state.model
+        local at = current
+            and index_of(models, function(m)
+              return m.provider == current.provider and m.id == current.id
+            end)
+          or 0
+        state.model = models[at % #models + 1]
+        data = { model = state.model, thinkingLevel = state.thinkingLevel or 'off', isScoped = false }
+      end
+    elseif command.type == 'set_thinking_level' then
+      state.thinkingLevel = command.level
+    elseif command.type == 'cycle_thinking_level' then
+      if state.model and state.model.reasoning then
+        local at = index_of(thinking_levels, function(level)
+          return level == (state.thinkingLevel or 'off')
+        end) or 0
+        state.thinkingLevel = thinking_levels[at % #thinking_levels + 1]
+        data = { level = state.thinkingLevel }
+      end
+    elseif command.type == 'get_commands' then
+      data = { commands = script.commands or {} }
+    elseif command.type == 'set_session_name' then
+      state.sessionName = command.name
+    elseif command.type == 'compact' then
+      data = { summary = 'compacted', firstKeptEntryId = 'e1', tokensBefore = 1 }
+    elseif command.type == 'get_fork_messages' then
+      data = { messages = script.fork_messages or {} }
+    elseif command.type == 'fork' or command.type == 'clone' then
+      if script.cancel_fork then
+        data = { cancelled = true }
+      else
+        new_sessions = new_sessions + 1
+        state.sessionId, state.sessionFile, messages = 'fake-fork-' .. new_sessions, nil, {}
+        data = { cancelled = false, text = command.type == 'fork' and 'forked text' or nil }
+      end
     else
       failure = 'unknown command: ' .. tostring(command.type)
     end

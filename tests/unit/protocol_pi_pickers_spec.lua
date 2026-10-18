@@ -1,0 +1,82 @@
+local fake_pi = require('tests.mocks.fake_pi_support')
+local config = require('opencode.config')
+local config_file = require('opencode.config_file')
+local base_picker = require('opencode.ui.base_picker')
+local model_picker = require('opencode.model_picker')
+local variant_picker = require('opencode.variant_picker')
+local model_state = require('opencode.model_state')
+local state = require('opencode.state')
+local stub = require('luassert.stub')
+
+describe('pi backend with the shared model and variant pickers', function()
+  local ctx, saved_backend, saved_include, picked
+
+  before_each(function()
+    ctx = fake_pi.start({
+      state = { sessionId = 's', model = { id = 'sonnet', provider = 'anthropic', reasoning = true } },
+      models = {
+        { id = 'sonnet', name = 'Sonnet', provider = 'anthropic', reasoning = true },
+        { id = 'opus', name = 'Opus', provider = 'anthropic', reasoning = true },
+        { id = 'gpt', name = 'GPT', provider = 'openai', reasoning = false },
+      },
+    })
+    saved_backend, saved_include = config.values.backend, config.values.model_picker.include
+    config.values.backend = 'pi'
+    state.jobs.clear_server()
+    config_file.providers_promise = nil
+    -- Connecting lazily mid-test would reset the provider cache the pickers rely on.
+    require('opencode.server_job').ensure_server():wait()
+    stub(model_state, 'load').returns({ favorite = {}, recent = {}, variant = {} })
+    picked = nil
+    stub(base_picker, 'pick').invokes(function(opts)
+      picked = opts
+    end)
+  end)
+
+  after_each(function()
+    base_picker.pick:revert()
+    model_state.load:revert()
+    local server = state.opencode_server
+    if server then
+      server:close()
+    end
+    state.jobs.clear_server()
+    config.values.backend = saved_backend
+    config.values.model_picker.include = saved_include
+    ctx:stop()
+  end)
+
+  local function names(items)
+    return vim.tbl_map(function(item)
+      return item.provider .. '/' .. item.model
+    end, items)
+  end
+
+  it('lists the models pi reports', function()
+    model_picker.select(function() end):wait()
+    assert.same({ 'anthropic/opus', 'anthropic/sonnet', 'openai/gpt' }, names(picked.items))
+  end)
+
+  it('applies the include allowlist to pi models', function()
+    config.values.model_picker.include = { 'openai/gpt' }
+    model_picker.select(function() end):wait()
+    assert.same({ 'openai/gpt' }, names(picked.items))
+  end)
+
+  it('offers thinking levels as variants of a reasoning model', function()
+    state.model.set_model('anthropic/sonnet')
+    variant_picker.select(function() end):wait()
+    local variants = vim.tbl_map(function(item)
+      return item.name
+    end, picked.items)
+    assert.is_truthy(vim.tbl_contains(variants, 'off'))
+    assert.is_truthy(vim.tbl_contains(variants, 'high'))
+    assert.equals('default', variants[1])
+  end)
+
+  it('does not offer variants for a model without reasoning', function()
+    state.model.set_model('openai/gpt')
+    variant_picker.select(function() end):wait()
+    assert.is_nil(picked)
+  end)
+end)

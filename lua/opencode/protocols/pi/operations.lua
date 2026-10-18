@@ -1,5 +1,7 @@
 local Promise = require('opencode.promise')
 local id = require('opencode.id')
+local log = require('opencode.log')
+local catalog = require('opencode.protocols.pi.catalog')
 local process = require('opencode.protocols.pi.process')
 local sessions = require('opencode.protocols.pi.sessions')
 
@@ -70,6 +72,35 @@ local function ensure_active(connection, session_id)
   connection.pi.session_id = session_id
 end
 
+---A crashed pi is only restarted by operations that start new work, and says so; everything else fails.
+---@return Promise<any>
+local function revive()
+  local handle = process.get().process
+  if not handle.crashed then
+    return Promise.new():resolve(nil)
+  end
+  log.warn('pi process had exited unexpectedly; restarting it')
+  return handle:restart()
+end
+
+---Skips requests that would not change anything, so a plain prompt costs no extra round trips.
+---@param provider? string
+---@param model_id? string
+---@param variant? string
+local function apply_selection(provider, model_id, variant)
+  local client = process.get()
+  local pi_state = client:get_state():await()
+  local changed = false
+  local current = pi_state.model
+  if provider and model_id and (not current or current.provider ~= provider or current.id ~= model_id) then
+    client:set_model(provider, model_id):await()
+    changed = true
+  end
+  if variant and (changed or variant ~= pi_state.thinkingLevel) then
+    client:set_thinking_level(variant):await()
+  end
+end
+
 function M.list_sessions(_, location)
   return Promise.new():resolve({ data = list_in(location), cursor = {} })
 end
@@ -96,6 +127,7 @@ M.get_session = Promise.async(function(connection, session_id)
 end)
 
 M.create_session = Promise.async(function(connection, location)
+  revive():await()
   local client = process.get()
   if client:new_session():await().cancelled then
     error('Pi refused to start a new session', 0)
@@ -131,7 +163,10 @@ local function prompt_text(input)
 end
 
 M.submit = Promise.async(function(connection, session_id, input)
+  revive():await()
   ensure_active(connection, session_id)
+  local model = input.model
+  apply_selection(model and model.providerID, model and model.modelID, input.variant)
   process.get():prompt(prompt_text(input)):await()
   return { id = input.id or id.ascending('message') }
 end)
@@ -142,6 +177,167 @@ M.interrupt = Promise.async(function(connection, session_id)
   end
   process.get():abort():await()
   return true
+end)
+
+---@param connection OpencodePiConnection
+---@param session_id string
+---@param model OpencodeV2ModelInput
+M.set_session_model = Promise.async(function(connection, session_id, model)
+  ensure_active(connection, session_id)
+  apply_selection(model.providerID, model.id, model.variant)
+  return true
+end)
+
+M.set_thinking_level = Promise.async(function(_, level)
+  process.get():set_thinking_level(level):await()
+  return level
+end)
+
+M.cycle_thinking_level = Promise.async(function()
+  local result = process.get():cycle_thinking_level():await()
+  if not result.level then
+    error('Current model does not support thinking levels', 0)
+  end
+  return result.level
+end)
+
+M.cycle_model = Promise.async(function()
+  local result = process.get():cycle_model():await()
+  if not result.model then
+    error('No other model to cycle to', 0)
+  end
+  return { providerID = result.model.provider, id = result.model.id, variant = result.thinkingLevel }
+end)
+
+---@return Promise<OpencodePiModel[]>
+local function available_models()
+  return process.get():get_available_models():and_then(function(data)
+    return data.models
+  end)
+end
+
+function M.list_models()
+  return available_models():and_then(catalog.models)
+end
+
+function M.list_providers(_, location)
+  return available_models():and_then(function(models)
+    return { location = location, data = catalog.providers(models) }
+  end)
+end
+
+M.get_model_catalog = Promise.async(function()
+  local models = available_models():await()
+  return catalog.catalog(models, process.get():get_state():await().model)
+end)
+
+M.get_default_model = Promise.async(function()
+  return catalog.current_model(process.get():get_state():await())
+end)
+
+M.get_config = Promise.async(function()
+  local model = catalog.current_model(process.get():get_state():await())
+  return { model = model and (model.providerID .. '/' .. model.id), agent = {} }
+end)
+
+---@return Promise<OpencodePiCommand[]>
+local function available_commands()
+  return process.get():get_commands():and_then(function(data)
+    return data.commands
+  end)
+end
+
+function M.list_commands()
+  return available_commands():and_then(catalog.commands)
+end
+
+function M.list_skills()
+  return available_commands():and_then(catalog.skills)
+end
+
+function M.get_user_commands()
+  return available_commands():and_then(catalog.user_commands)
+end
+
+---Pi runs slash commands (extensions, templates, skills) itself when they lead a prompt.
+M.send_command = Promise.async(function(connection, session_id, _, input)
+  revive():await()
+  ensure_active(connection, session_id)
+  local provider, model_id
+  if input.model then
+    provider, model_id = input.model:match('^(.-)/(.+)$')
+    if not provider then
+      error('Pi send_command model must use provider/model format', 0)
+    end
+  end
+  apply_selection(provider, model_id, input.variant)
+  local text = '/' .. input.command
+  if input.arguments and input.arguments ~= '' then
+    text = text .. ' ' .. input.arguments
+  end
+  process.get():prompt(text):await()
+  return true
+end)
+
+M.rename_session = Promise.async(function(connection, session_id, _, title)
+  if title == '' then
+    error('Session title cannot be empty', 0)
+  end
+  ensure_active(connection, session_id)
+  process.get():set_session_name(title):await()
+  local observation = connection.observations[session_id]
+  if observation then
+    observation:read().session.title = title
+    observation:_event_changed('session')
+  end
+  return true
+end)
+
+M.summarize_session = Promise.async(function(connection, session_id)
+  ensure_active(connection, session_id)
+  process.get():compact():await()
+  return { id = id.ascending('message') }
+end)
+
+---Pi forks by entry id and knows nothing of this client's message ids, so the Nth user message maps to the Nth fork point.
+---@param session_id string
+---@param message_id string
+---@param connection OpencodePiConnection
+---@return string
+local function fork_entry_id(connection, session_id, message_id)
+  local observation = connection.observations[session_id]
+  if not observation then
+    error('Pi cannot fork a session that is not observed', 0)
+  end
+  local state = observation:read()
+  local ordinal = 0
+  local found
+  for _, entry_id in ipairs(state.entry_order) do
+    local entry = state.entries_by_id[entry_id] --[[@as table]]
+    if entry.kind == 'user' then
+      ordinal = ordinal + 1
+    end
+    if entry_id == message_id then
+      found = ordinal
+      break
+    end
+  end
+  local target = found and process.get():get_fork_messages():await().messages[found]
+  if not target then
+    error('Pi has no fork point for message ' .. message_id, 0)
+  end
+  return target.entryId
+end
+
+M.fork_session = Promise.async(function(connection, session_id, location, input)
+  ensure_active(connection, session_id)
+  local client = process.get()
+  local request = input and input.messageID and client:fork(fork_entry_id(connection, session_id, input.messageID))
+    or client:clone()
+  if request:await().cancelled then
+    error('Pi refused to fork the session', 0)
+  end
+  return live_session(current_state(connection), location)
 end)
 
 ---Adapts pi's JSONL events to the SSE framing the shared observation lifecycle consumes.
@@ -176,23 +372,11 @@ local empty = {
   list_agents = function()
     return { { id = 'pi', mode = 'primary' } }
   end,
-  list_models = function()
-    return {}
-  end,
-  list_commands = function()
-    return {}
-  end,
-  list_skills = function()
-    return {}
-  end,
   -- The UI requires a primary agent; pi has a single behavior, not switchable modes.
   list_primary_agents = function()
     return { 'pi' }
   end,
   list_subagents = function()
-    return {}
-  end,
-  get_user_commands = function()
     return {}
   end,
   list_mcp_servers = function()
@@ -203,18 +387,6 @@ local empty = {
   end,
   get_file_status = function()
     return {}
-  end,
-  get_default_model = function()
-    return nil
-  end,
-  get_config = function()
-    return { agent = {} }
-  end,
-  list_providers = function()
-    return { location = { directory = vim.fn.getcwd() }, data = {} }
-  end,
-  get_model_catalog = function()
-    return { providers = {}, default = {} }
   end,
   get_current_project = function()
     return { id = 'pi' }
@@ -229,15 +401,10 @@ end
 
 for _, name in ipairs({
   'delete_session',
-  'rename_session',
-  'summarize_session',
-  'fork_session',
   'revert_message',
   'unrevert_messages',
   'diff_session',
   'set_session_agent',
-  'set_session_model',
-  'send_command',
   'activate_skill',
   'reply_permission',
   'reply_question',

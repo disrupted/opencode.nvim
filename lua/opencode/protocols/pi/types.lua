@@ -16,15 +16,34 @@
 ---@field model? string
 ---@field stopReason? string
 ---@field errorMessage? string
+---@field responseId? string
 ---@field usage? table
 
 ---@class OpencodePiState Result of the `get_state` RPC
 ---@field sessionId? string
 ---@field sessionFile? string
 ---@field isStreaming? boolean
+---@field model? OpencodePiModel
+---@field thinkingLevel? string
+
+---@class OpencodePiModel
+---@field id string
+---@field name? string
+---@field provider string
+---@field reasoning? boolean
+---@field contextWindow? integer
+---@field maxTokens? integer
+
+---@class OpencodePiCommand
+---@field name string
+---@field description? string
+---@field source 'extension'|'prompt'|'skill'|string
+---@field path? string
 
 ---@class OpencodePiProcessHandle
+---@field crashed boolean
 ---@field start fun(self: OpencodePiProcessHandle): Promise<any>
+---@field restart fun(self: OpencodePiProcessHandle): Promise<any>
 ---@field is_running fun(self: OpencodePiProcessHandle): boolean
 ---@field stop fun(self: OpencodePiProcessHandle)
 
@@ -36,6 +55,17 @@
 ---@field new_session fun(self: OpencodePiClient): Promise<{cancelled?: boolean}>
 ---@field prompt fun(self: OpencodePiClient, message: string): Promise<any>
 ---@field abort fun(self: OpencodePiClient): Promise<any>
+---@field get_available_models fun(self: OpencodePiClient): Promise<{models: OpencodePiModel[]}>
+---@field set_model fun(self: OpencodePiClient, provider: string, model_id: string): Promise<OpencodePiModel>
+---@field cycle_model fun(self: OpencodePiClient): Promise<{model: OpencodePiModel, thinkingLevel: string}|nil>
+---@field set_thinking_level fun(self: OpencodePiClient, level: string): Promise<any>
+---@field cycle_thinking_level fun(self: OpencodePiClient): Promise<{level: string}|nil>
+---@field get_commands fun(self: OpencodePiClient): Promise<{commands: OpencodePiCommand[]}>
+---@field set_session_name fun(self: OpencodePiClient, name: string): Promise<any>
+---@field compact fun(self: OpencodePiClient): Promise<table>
+---@field get_fork_messages fun(self: OpencodePiClient): Promise<{messages: {entryId: string, text: string}[]}>
+---@field fork fun(self: OpencodePiClient, entry_id: string): Promise<{cancelled?: boolean, text?: string}>
+---@field clone fun(self: OpencodePiClient): Promise<{cancelled?: boolean}>
 
 ---@class OpencodePiConnection: OpencodeServer
 ---@field operations OpencodePiOperations
@@ -67,6 +97,9 @@
 ---@field diff_session fun(connection: OpencodePiConnection, session_id: string, from?: string, to?: string, reverse_path_map?: OpencodeV2PathMap): Promise<OpencodeV2FileDiff[]>
 ---@field set_session_agent fun(connection: OpencodePiConnection, session_id: string, agent: string): Promise<boolean>
 ---@field set_session_model fun(connection: OpencodePiConnection, session_id: string, model: OpencodeV2ModelInput): Promise<boolean>
+---@field set_thinking_level fun(connection: OpencodePiConnection, level: string): Promise<string>
+---@field cycle_thinking_level fun(connection: OpencodePiConnection): Promise<string>
+---@field cycle_model fun(connection: OpencodePiConnection): Promise<OpencodeV2ModelReference>
 ---@field send_command fun(connection: OpencodePiConnection, session_id: string, location: OpencodeLocation?, input: OpencodeV2CommandInput): Promise<boolean>
 ---@field submit fun(connection: OpencodePiConnection, session_id: string, input: OpencodeV2SubmitInput, path_map?: OpencodeV2PathMap, reverse_path_map?: OpencodeV2PathMap): Promise<OpencodeV2Admission>
 ---@field interrupt fun(connection: OpencodePiConnection, session_id: string): Promise<boolean>

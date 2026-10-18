@@ -35,6 +35,7 @@ end
 ---@field job_id? integer
 ---@field exited boolean
 ---@field stopping boolean
+---@field crashed boolean Exited without being asked to; requests fail until `restart` so a dead pi is never revived silently
 ---@field stdout_buffer string
 ---@field generation integer Distinguishes a restarted job from the stopped one whose callbacks may still arrive
 ---@field on_line fun(line: string)
@@ -46,10 +47,15 @@ Process.__index = Process
 ---@param on_exit fun()
 ---@return OpencodePiProcess
 function Process.new(on_line, on_exit)
-  return setmetatable(
-    { exited = false, stopping = false, stdout_buffer = '', generation = 0, on_line = on_line, on_exit = on_exit },
-    Process
-  )
+  return setmetatable({
+    exited = false,
+    stopping = false,
+    crashed = false,
+    stdout_buffer = '',
+    generation = 0,
+    on_line = on_line,
+    on_exit = on_exit,
+  }, Process)
 end
 
 ---@return boolean
@@ -80,7 +86,7 @@ function Process:start()
     return Promise.new():reject(executable .. ' command not found')
   end
 
-  self.exited, self.stopping, self.stdout_buffer = false, false, ''
+  self.exited, self.stopping, self.crashed, self.stdout_buffer = false, false, false, ''
   self.generation = self.generation + 1
   local generation = self.generation
   local job_id = vim.fn.jobstart(command, {
@@ -107,6 +113,7 @@ function Process:start()
         end
         local expected = self.stopping
         self.exited, self.job_id = true, nil
+        self.crashed = not expected
         self.on_exit()
         emit({ type = 'process_exit', code = code, expected = expected })
       end)
@@ -119,9 +126,18 @@ function Process:start()
   return Promise.new():resolve(self)
 end
 
+---@return Promise<OpencodePiProcess>
+function Process:restart()
+  self.crashed = false
+  return self:start()
+end
+
 ---@param command table
 ---@return Promise<boolean>
 function Process:send(command)
+  if self.crashed then
+    return Promise.new():reject('pi process exited unexpectedly; restart it to continue')
+  end
   return self:start():and_then(function()
     local ok = pcall(vim.fn.chansend, self.job_id --[[@as integer]], vim.json.encode(command) .. '\n')
     if not ok then
@@ -132,7 +148,7 @@ function Process:send(command)
 end
 
 function Process:stop()
-  self.exited = true
+  self.exited, self.crashed = true, false
   if self.job_id then
     self.stopping = true
     pcall(vim.fn.chanclose, self.job_id, 'stdin')
@@ -237,6 +253,50 @@ end
 
 function Client:abort()
   return self:request({ type = 'abort' })
+end
+
+function Client:get_available_models()
+  return self:request({ type = 'get_available_models' })
+end
+
+function Client:set_model(provider, model_id)
+  return self:request({ type = 'set_model', provider = provider, modelId = model_id })
+end
+
+function Client:cycle_model()
+  return self:request({ type = 'cycle_model' })
+end
+
+function Client:set_thinking_level(level)
+  return self:request({ type = 'set_thinking_level', level = level })
+end
+
+function Client:cycle_thinking_level()
+  return self:request({ type = 'cycle_thinking_level' })
+end
+
+function Client:get_commands()
+  return self:request({ type = 'get_commands' })
+end
+
+function Client:set_session_name(name)
+  return self:request({ type = 'set_session_name', name = name })
+end
+
+function Client:compact()
+  return self:request({ type = 'compact' })
+end
+
+function Client:get_fork_messages()
+  return self:request({ type = 'get_fork_messages' })
+end
+
+function Client:fork(entry_id)
+  return self:request({ type = 'fork', entryId = entry_id })
+end
+
+function Client:clone()
+  return self:request({ type = 'clone' })
 end
 
 ---@type OpencodePiClient|nil
