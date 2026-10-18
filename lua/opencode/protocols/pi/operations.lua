@@ -5,7 +5,7 @@ local sessions = require('opencode.protocols.pi.sessions')
 
 ---Pi mirrors the v2 operation surface so shared callers need no protocol branches.
 ---@diagnostic disable-next-line: missing-fields
-local M = {} --[[@as OpencodeV2Operations]]
+local M = {} --[[@as OpencodePiOperations]]
 
 ---@param session_id string
 ---@return OpencodePiSessionFact|nil

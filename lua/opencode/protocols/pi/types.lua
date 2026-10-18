@@ -23,8 +23,13 @@
 ---@field sessionFile? string
 ---@field isStreaming? boolean
 
+---@class OpencodePiProcessHandle
+---@field start fun(self: OpencodePiProcessHandle): Promise<any>
+---@field is_running fun(self: OpencodePiProcessHandle): boolean
+---@field stop fun(self: OpencodePiProcessHandle)
+
 ---@class OpencodePiClient
----@field process {start: fun(self: table): Promise<any>, is_running: fun(self: table): boolean, stop: fun(self: table)}
+---@field process OpencodePiProcessHandle
 ---@field get_state fun(self: OpencodePiClient): Promise<OpencodePiState>
 ---@field get_messages fun(self: OpencodePiClient): Promise<{messages: OpencodePiMessage[]}>
 ---@field switch_session fun(self: OpencodePiClient, path: string): Promise<{cancelled?: boolean}>
@@ -33,6 +38,58 @@
 ---@field abort fun(self: OpencodePiClient): Promise<any>
 
 ---@class OpencodePiConnection: OpencodeServer
+---@field operations OpencodePiOperations
 ---@field pi {session_id?: string} Pi runs one active session; it is tracked here because switching is a process command
+
+---@alias OpencodePiLocationListOperation fun(connection: OpencodePiConnection, location: OpencodeLocation, path_map?: OpencodeV2PathMap, reverse_path_map?: OpencodeV2PathMap): Promise<table[]>
+
+---@class OpencodePiOperations
+---@field get_current_project fun(connection: OpencodePiConnection, location: OpencodeLocation, path_map?: OpencodeV2PathMap, reverse_path_map?: OpencodeV2PathMap): Promise<table>
+---@field get_config fun(connection: OpencodePiConnection, location: OpencodeLocation, path_map?: OpencodeV2PathMap, reverse_path_map?: OpencodeV2PathMap): Promise<{model?: string, agent: table<string, {model?: string}>}>
+---@field list_providers fun(connection: OpencodePiConnection, location: OpencodeLocation, path_map?: OpencodeV2PathMap, reverse_path_map?: OpencodeV2PathMap): Promise<{location: OpencodeLocation, data: table[]}>
+---@field list_sessions fun(connection: OpencodePiConnection, location?: OpencodeLocation, cursor?: string, limit?: integer, path_map?: OpencodeV2PathMap, reverse_path_map?: OpencodeV2PathMap): Promise<OpencodeV2Page<table>>
+---@field list_sessions_project fun(connection: OpencodePiConnection, location: OpencodeLocation, path_map?: OpencodeV2PathMap, reverse_path_map?: OpencodeV2PathMap): Promise<table[]>
+---@field list_sessions_global fun(connection: OpencodePiConnection, reverse_path_map?: OpencodeV2PathMap): Promise<table[]>
+---@field list_active_sessions fun(connection: OpencodePiConnection): Promise<table<string, {type: 'running'}>>
+---@field list_inbox fun(connection: OpencodePiConnection, session_id: string, reverse_path_map?: OpencodeV2PathMap): Promise<table[]>
+---@field create_session fun(connection: OpencodePiConnection, location: OpencodeLocation, input?: table, path_map?: OpencodeV2PathMap, reverse_path_map?: OpencodeV2PathMap, selected?: OpencodeSessionSelection): Promise<table>
+---@field get_session fun(connection: OpencodePiConnection, session_id: string, location?: OpencodeLocation, path_map?: OpencodeV2PathMap, reverse_path_map?: OpencodeV2PathMap): Promise<table>
+---@field delete_session fun(connection: OpencodePiConnection, session_id: string): Promise<boolean>
+---@field rename_session fun(connection: OpencodePiConnection, session_id: string, location: OpencodeLocation?, title: string): Promise<boolean>
+---@field init_session fun(): never
+---@field share_session fun(): never
+---@field unshare_session fun(): never
+---@field summarize_session fun(connection: OpencodePiConnection, session_id: string): Promise<OpencodeV2Admission>
+---@field fork_session fun(connection: OpencodePiConnection, session_id: string, location?: OpencodeLocation, input?: {messageID?: string}, path_map?: OpencodeV2PathMap, reverse_path_map?: OpencodeV2PathMap): Promise<table>
+---@field revert_message fun(connection: OpencodePiConnection, session_id: string, location: OpencodeLocation?, input: {messageID: string}, path_map?: OpencodeV2PathMap, reverse_path_map?: OpencodeV2PathMap): Promise<SessionRevertInfo>
+---@field unrevert_messages fun(connection: OpencodePiConnection, session_id: string): Promise<boolean>
+---@field list_messages fun(connection: OpencodePiConnection, session_id: string, cursor?: string, limit?: integer, reverse_path_map?: OpencodeV2PathMap): Promise<OpencodeV2Page<table>>
+---@field diff_session fun(connection: OpencodePiConnection, session_id: string, from?: string, to?: string, reverse_path_map?: OpencodeV2PathMap): Promise<OpencodeV2FileDiff[]>
+---@field set_session_agent fun(connection: OpencodePiConnection, session_id: string, agent: string): Promise<boolean>
+---@field set_session_model fun(connection: OpencodePiConnection, session_id: string, model: OpencodeV2ModelInput): Promise<boolean>
+---@field send_command fun(connection: OpencodePiConnection, session_id: string, location: OpencodeLocation?, input: OpencodeV2CommandInput): Promise<boolean>
+---@field submit fun(connection: OpencodePiConnection, session_id: string, input: OpencodeV2SubmitInput, path_map?: OpencodeV2PathMap, reverse_path_map?: OpencodeV2PathMap): Promise<OpencodeV2Admission>
+---@field interrupt fun(connection: OpencodePiConnection, session_id: string): Promise<boolean>
+---@field activate_skill fun(connection: OpencodePiConnection, session_id: string, skill_id: string): Promise<boolean>
+---@field list_permissions OpencodePiLocationListOperation
+---@field reply_permission fun(connection: OpencodePiConnection, session_id: string, request_id: string, answer: OpencodeV2PermissionReply): Promise<boolean>
+---@field list_questions OpencodePiLocationListOperation
+---@field reply_question fun(connection: OpencodePiConnection, session_id: string, request_id: string, answer: OpencodeV2FormAnswers): Promise<boolean>
+---@field cancel_question fun(connection: OpencodePiConnection, session_id: string, request_id: string): Promise<boolean>
+---@field list_agents OpencodePiLocationListOperation
+---@field list_models OpencodePiLocationListOperation
+---@field get_default_model fun(connection: OpencodePiConnection, location: OpencodeLocation, path_map?: OpencodeV2PathMap, reverse_path_map?: OpencodeV2PathMap): Promise<OpencodeV2ModelReference|nil>
+---@field get_model_catalog fun(connection: OpencodePiConnection, location: OpencodeLocation, path_map?: OpencodeV2PathMap, reverse_path_map?: OpencodeV2PathMap): Promise<table>
+---@field list_primary_agents fun(connection: OpencodePiConnection, location: OpencodeLocation, path_map?: OpencodeV2PathMap, reverse_path_map?: OpencodeV2PathMap): Promise<string[]>
+---@field list_subagents fun(connection: OpencodePiConnection, location: OpencodeLocation, path_map?: OpencodeV2PathMap, reverse_path_map?: OpencodeV2PathMap): Promise<string[]>
+---@field get_user_commands fun(connection: OpencodePiConnection, location: OpencodeLocation, path_map?: OpencodeV2PathMap, reverse_path_map?: OpencodeV2PathMap): Promise<table<string, table>>
+---@field list_commands OpencodePiLocationListOperation
+---@field list_skills OpencodePiLocationListOperation
+---@field list_mcp_servers fun(connection: OpencodePiConnection, location: OpencodeLocation, path_map?: OpencodeV2PathMap, reverse_path_map?: OpencodeV2PathMap): Promise<table<string, OpencodeV2McpPickerServer>>
+---@field find_files fun(connection: OpencodePiConnection, query: string, location: OpencodeLocation, path_map?: OpencodeV2PathMap, reverse_path_map?: OpencodeV2PathMap): Promise<string[]>
+---@field get_file_status fun(connection: OpencodePiConnection, location: OpencodeLocation, path_map?: OpencodeV2PathMap, reverse_path_map?: OpencodeV2PathMap): Promise<table[]>
+---@field connect_mcp fun(connection: OpencodePiConnection, name: string, location: OpencodeLocation, path_map?: OpencodeV2PathMap): Promise<boolean>
+---@field disconnect_mcp fun(connection: OpencodePiConnection, name: string, location: OpencodeLocation, path_map?: OpencodeV2PathMap): Promise<boolean>
+---@field subscribe_events fun(connection: OpencodePiConnection, on_chunk: fun(chunk: string), on_disconnect?: fun(reason: any)): table
 
 return {}

@@ -22,7 +22,7 @@ function M.session_root()
     return vim.fs.normalize(vim.fs.joinpath(vim.fn.expand(agent_dir), 'sessions'))
   end
 
-  return vim.fs.normalize(vim.fs.joinpath(vim.uv.os_homedir(), '.pi', 'agent', 'sessions'))
+  return vim.fs.normalize(vim.fs.joinpath(vim.uv.os_homedir() --[[@as string]], '.pi', 'agent', 'sessions'))
 end
 
 return M

@@ -74,8 +74,9 @@ function Process:start()
     return Promise.new():resolve(self)
   end
   local command = server.command()
-  if vim.fn.executable(command[1]) == 0 then
-    return Promise.new():reject(command[1] .. ' command not found')
+  local executable = command[1] --[[@as string]]
+  if vim.fn.executable(executable) == 0 then
+    return Promise.new():reject(executable .. ' command not found')
   end
 
   self.exited, self.stopping, self.stdout_buffer = false, false, ''
@@ -112,9 +113,9 @@ end
 ---@return Promise<boolean>
 function Process:send(command)
   return self:start():and_then(function()
-    local ok = pcall(vim.fn.chansend, self.job_id, vim.json.encode(command) .. '\n')
+    local ok = pcall(vim.fn.chansend, self.job_id --[[@as integer]], vim.json.encode(command) .. '\n')
     if not ok then
-      return Promise.new():reject('failed to write to pi RPC process')
+      error('failed to write to pi RPC process', 0)
     end
     return true
   end)
@@ -132,7 +133,7 @@ end
 
 ---@class OpencodePiRpcClient: OpencodePiClient
 ---@field process OpencodePiProcess
----@field pending table<string, Promise<any>>
+---@field pending table<string, Promise<any>?>
 ---@field streaming boolean
 local Client = {}
 Client.__index = Client

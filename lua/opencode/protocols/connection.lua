@@ -16,16 +16,19 @@ local M = {}
 ---@field start_server? fun(): Promise<OpencodeServer> Launches or attaches to the backend and resolves a ready connection; required for `config.backend`
 ---@field check_health? fun(connection: OpencodeServer): Promise<boolean> Overrides the HTTP health request, required for non-HTTP connections
 ---@field probe_rank? integer Position in the HTTP probe order; omit to opt out of probing
----@field decode_probe fun(response: table|nil, decode_json: function, invalid_response?: function): table|nil, string|nil, boolean|nil
+---@field decode_probe fun(response: table|nil, decode_json: function, invalid_response: function): table|nil, string|nil, boolean|nil
 ---@field operations string
 ---@field observation string
+
+---@class OpencodeStartableAdapter: OpencodeProtocolAdapter
+---@field start_server fun(): Promise<OpencodeServer>
 
 ---@class OpencodeProtocolObservationAdapter
 ---@field new fun(connection: OpencodeServer, ref: table): OpencodeObservation
 ---@field close fun(connection: OpencodeServer)
 
 ---@class OpencodeProtocolRuntime
----@field operations OpencodeV1Operations|OpencodeV2Operations
+---@field operations OpencodeV1Operations|OpencodeV2Operations|OpencodePiOperations
 ---@field observation OpencodeProtocolObservationAdapter
 
 ---@param response? {status: integer, headers?: table<string, string>, body: string}
@@ -99,7 +102,7 @@ function M.probe(connection, timeout_ms)
   end
 
   local function probe_at(index)
-    local adapter = order[index]
+    local adapter = order[index] --[[@as OpencodeProtocolAdapter]]
     request(connection, adapter, timeout_ms, function(response)
       local body, err, fallback = adapter.decode_probe(response, decode_json, invalid_response)
       if fallback and order[index + 1] then
@@ -132,7 +135,7 @@ end
 ---@param connection OpencodeServer
 ---@return Promise<boolean>
 function M.check_health(connection)
-  local adapter = registry.get(connection.protocol)
+  local adapter = connection.protocol and registry.get(connection.protocol)
   if not adapter then
     return Promise.new():resolve(false)
   end

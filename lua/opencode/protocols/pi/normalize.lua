@@ -195,7 +195,7 @@ function M.entry(message, session_id, index)
 end
 
 ---@param entries table[]
----@return table<string, table> tool parts by call id
+---@return table<string, table?> tool parts by call id
 local function index_tool_parts(entries)
   local parts = {}
   for _, entry in ipairs(entries) do
@@ -213,9 +213,11 @@ end
 ---@param session_id string
 ---@return table[]
 function M.entries(messages, session_id)
-  local entries, calls = {}, {}
+  local entries = {}
+  ---@type table<string, table>
+  local calls = {}
   for index, message in ipairs(messages) do
-    local call = message.role == 'toolResult' and calls[message.toolCallId]
+    local call = message.role == 'toolResult' and calls[message.toolCallId --[[@as string]]]
     if call then
       M.apply_tool_result(call, message)
     else

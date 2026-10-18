@@ -250,7 +250,7 @@ local try_native_service = Promise.async(function()
 end)
 
 ---Non-opencode backends own launch, health and shutdown; HTTP discovery below is skipped.
----@return OpencodeProtocolAdapter|nil
+---@return OpencodeStartableAdapter|nil
 local function backend_adapter()
   local backend = config.backend
   if backend == 'opencode' then
@@ -261,9 +261,11 @@ local function backend_adapter()
   if not adapter or not adapter.start_server then
     error(string.format('backend %q cannot start a server', backend), 0)
   end
+  ---@cast adapter OpencodeStartableAdapter
   return adapter
 end
 
+---@return Promise<OpencodeServer>
 local function _start_server()
   local adapter = backend_adapter()
   if adapter then

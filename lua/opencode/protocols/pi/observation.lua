@@ -25,7 +25,7 @@ local function put_entry(observation, entry)
   local state = observation:read()
   local existing = state.entries_by_id[entry.id]
   normalize.carry_tool_state(entry, existing)
-  state.entries_by_id[entry.id] = entries.replace(existing, entry)
+  state.entries_by_id[entry.id] = entries.replace(existing, entry) --[[@as OpencodeMessage]]
   if not existing then
     state.entry_order[#state.entry_order + 1] = entry.id
   end
@@ -113,7 +113,7 @@ local function set_activity(observation, running)
   observation:_event_changed('execution')
 end
 
----@type table<string, fun(observation: OpencodePiObservation, event: table)>
+---@type table<string, (fun(observation: OpencodePiObservation, event: table))?>
 local handlers = {
   agent_start = function(observation)
     set_activity(observation, true)
@@ -151,7 +151,7 @@ local handlers = {
 ---@param connection OpencodePiConnection
 ---@param event table
 local function route_event(connection, event)
-  local observation = connection.observations[connection.pi.session_id]
+  local observation = connection.observations[connection.pi.session_id --[[@as string]]]
   local handler = handlers[event.type]
   if observation and handler then
     ---@cast observation OpencodePiObservation
