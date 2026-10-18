@@ -451,6 +451,7 @@
 ---@field default_mode 'build' | 'plan' | string -- Default mode
 ---@field default_system_prompt string | nil
 ---@field keymap_prefix string
+---@field backend 'opencode' | 'pi' | string -- Protocol backend; non-opencode values load `opencode.protocols.<backend>.connection` and launch through it
 ---@field opencode_executable 'opencode' | string -- Command run for calling opencode
 ---@field lock_session_to_directory boolean|fun(change: OpencodeDirectoryChange): boolean -- true locks everywhere; a function decides per directory change; errors fall back to following cwd
 ---@field server OpencodeServerConfig -- Custom/external server configuration
