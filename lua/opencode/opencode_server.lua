@@ -5,6 +5,7 @@ local auth = require('opencode.auth')
 local protocol_connection = require('opencode.protocols.connection')
 
 --- @class OpencodeServer
+---@field kind 'http'|'stdio' Transport kind; `url` and `credential` exist only for http
 ---@field job vim.SystemObj|nil The vim.system job handle
 ---@field url string|nil The server URL once ready
 ---@field port number|nil The port this server is using (for custom servers)
@@ -50,6 +51,7 @@ function OpencodeServer.new()
   ensure_vim_leave_autocmd()
 
   return setmetatable({
+    kind = 'http',
     job = nil,
     url = nil,
     port = nil,
@@ -148,7 +150,8 @@ function OpencodeServer:mark_ready()
   if self.shutdown_promise:is_resolved() then
     error('cannot ready a closed Connection')
   end
-  if type(self.url) ~= 'string' or self.url == '' then
+  local http = self.kind == 'http'
+  if http and (type(self.url) ~= 'string' or self.url == '') then
     error('ready connection requires url')
   end
   local runtime = self.protocol and protocol_connection.runtime(self.protocol)
@@ -166,11 +169,13 @@ function OpencodeServer:mark_ready()
     error('ready connection server_identity pid must be a number')
   end
   self.version = self.server_identity.version
-  if type(self.credential) ~= 'table' or type(self.credential.username) ~= 'string' then
-    error('ready connection requires credential')
-  end
-  if self.credential.password ~= nil and type(self.credential.password) ~= 'string' then
-    error('ready connection credential password must be a string')
+  if http then
+    if type(self.credential) ~= 'table' or type(self.credential.username) ~= 'string' then
+      error('ready connection requires credential')
+    end
+    if self.credential.password ~= nil and type(self.credential.password) ~= 'string' then
+      error('ready connection credential password must be a string')
+    end
   end
   self.operations = runtime.operations
   local observation_protocol = runtime.observation
@@ -211,7 +216,7 @@ end
 ---Check if the server is reachable via its health endpoint.
 ---@return Promise<boolean>
 function OpencodeServer:check_health()
-  if not self._ready or not self.url then
+  if not self._ready then
     return Promise.new():resolve(false)
   end
   return protocol_connection.check_health(self)

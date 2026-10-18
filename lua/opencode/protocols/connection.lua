@@ -13,6 +13,7 @@ local M = {}
 ---@class OpencodeProtocolAdapter
 ---@field name string
 ---@field health_path string
+---@field check_health? fun(connection: OpencodeServer): Promise<boolean> Overrides the HTTP health request, required for non-HTTP connections
 ---@field probe_rank? integer Position in the HTTP probe order; omit to opt out of probing
 ---@field decode_probe fun(response: table|nil, decode_json: function, invalid_response?: function): table|nil, string|nil, boolean|nil
 ---@field operations string
@@ -132,6 +133,12 @@ end
 function M.check_health(connection)
   local adapter = registry.get(connection.protocol)
   if not adapter then
+    return Promise.new():resolve(false)
+  end
+  if adapter.check_health then
+    return adapter.check_health(connection)
+  end
+  if not connection.url then
     return Promise.new():resolve(false)
   end
 
