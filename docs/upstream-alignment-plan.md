@@ -46,10 +46,7 @@ Limits of the seam today (these require the core patches below):
 ## Naming and branding decisions (defaults)
 
 1. **Internal namespace stays `opencode`** (`lua/opencode/...`). No mass rename. This is the single most important decision for merge cost.
-2. **User-facing Pi branding via thin shims**:
-   - `plugin/pi.lua`: `:Pi` command (delegating to the same command dispatcher).
-   - `lua/pi/init.lua`: `setup(opts)` calling `require('opencode').setup(vim.tbl_deep_extend('force', { backend = 'pi' }, opts or {}))`.
-   - `ftplugin/pi.lua`, `ftplugin/pi_output.lua`: keep filetype names the fork already exposes; they must not require edits to upstream files.
+2. **No Pi-specific branding shims** (no `:Pi` command, no `lua/pi` module, no Pi-named filetypes). Pi is selected with `backend = 'pi'` on the shared plugin. A neutral product name and any rename belong to the provider-agnostic proposal agreed with the upstream maintainer, not to this fork.
 3. Fork-only files live in clearly separate locations (see "Fork-owned inventory"). Avoid editing upstream files except through the numbered core patches.
 
 If a decision above is reversed by the maintainer, record it in this file before continuing.
@@ -88,7 +85,7 @@ Each is a separate small commit.
 
 - **P1 protocol registry.** Replace the hard-coded `adapters` table in `protocols/connection.lua` with a registry: `register(name, adapter)`, lookup by name. `v1` and `v2` register themselves. Probe order becomes a list, not nested callbacks, and custom adapters can opt out of probing.
 - **P2 transport-agnostic connection.** Allow a connection kind that is not HTTP (stdio). Adapters own `check_health`; `OpencodeServer` carries `kind`, with `url`/`credential` only for HTTP. Adjust `transport.lua` callers to go through the adapter (or no-op for stdio).
-- **P3 pluggable server launch.** Let `server_job.ensure_server` delegate spawn and shutdown to the selected adapter (HTTP adapters keep the current behavior verbatim). Add config `backend = 'opencode' | 'pi'` (default `'opencode'` upstream; the `lua/pi` shim defaults to `'pi'`).
+- **P3 pluggable server launch.** Let `server_job.ensure_server` delegate spawn and shutdown to the selected adapter (HTTP adapters keep the current behavior verbatim). Add config `backend = 'opencode' | 'pi'` (default `'opencode'`).
 - **P4 capability reporting.** Ensure features that need unsupported resources (session tabs, file watching, multi-session) degrade through the existing `unsupported` sync state instead of erroring. Add the minimum UI guards where upstream assumes a capability.
 
 Acceptance: upstream tests and `make check` pass unchanged with `backend = 'opencode'`; no behavior change for v1/v2. `make topology-check` clean.
@@ -138,10 +135,10 @@ Re-apply each as its own commit, ideally additive files rather than edits to ups
 
 Each item: confirm it is still needed on top of upstream, implement minimally, add a test, and note whether it is an upstream PR candidate.
 
-### Phase 4: Branding shims and docs
+### Phase 4: Docs and provider-agnostic proposal
 
-- `plugin/pi.lua`, `lua/pi/init.lua`, `ftplugin/*` as described above.
-- README: Pi installation and config; link back to upstream; document `backend` option.
+- README: document the `backend` option and Pi setup; link back to upstream.
+- Draft the proposal for the upstream maintainer: backend registry, non-HTTP connections, pluggable launch, capability dispatch (see Phase 6), plus a neutral product name if the UI moves away from the Opencode naming.
 - Delete `IMPLEMENTATION_PLAN.md` and `scripts/sync-upstream.sh`/`UPSTREAM` on the new branch (obsolete once this plan lands); keep the Pi RPC reference portions of `IMPLEMENTATION_PLAN.md` in `docs/` if still useful.
 
 ### Phase 5: Tests, CI, cut-over
@@ -153,7 +150,7 @@ Each item: confirm it is still needed on top of upstream, implement minimally, a
 ### Phase 6: Upstream collaboration (parallel, owned by the maintainer)
 
 - Open a discussion/RFC with the upstream author using P1–P4 as the concrete proposal (registry, non-HTTP connection, pluggable launch, capability reporting).
-- If accepted, offer the Pi adapter either in-tree (`protocols/pi`) or as an external plugin that registers via the registry. The fork then reduces to branding and fork-only features.
+- If accepted, offer the Pi adapter either in-tree (`protocols/pi`) or as an external plugin that registers via the registry. The fork then reduces to fork-only features.
 
 ## Testing
 
@@ -188,7 +185,7 @@ Also required:
 ## Fork-owned inventory (what the fork must keep carrying)
 
 Backend (moves under `protocols/pi/`): `pi_process`, `rpc_client`, `pi_server`, `pi_sessions`, `event_adapter`, `prompt_adapter`, Pi branches of `api_client`/`event_manager`.
-Additive features: `markdown_table`, `image_preview` (deferred), `vanilla` commands, `pin`, `lsp/pi_ls`, `extensions/`, `bin/`, `ftplugin/pi*.lua`, `plugin/pi.lua`, `lua/pi/init.lua`.
+Additive features: `markdown_table`, `image_preview` (deferred), `vanilla` commands, `pin`, `lsp/pi_ls`, `extensions/`, `bin/`.
 Core patches to upstream files: P1–P4 only.
 
 Keep this list current. If a change touches an upstream file outside P1–P4, it needs a justification in the commit body and an upstream-PR note.
