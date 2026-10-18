@@ -1,5 +1,6 @@
 local M = {
   name = 'v2',
+  probe_rank = 1,
   health_path = '/api/info',
   operations = 'opencode.protocols.v2.operations',
   observation = 'opencode.protocols.v2.observation',
@@ -33,5 +34,7 @@ function M.decode_probe(response, decode_json)
   end
   return body, nil, false
 end
+
+require('opencode.protocols.registry').register(M)
 
 return M

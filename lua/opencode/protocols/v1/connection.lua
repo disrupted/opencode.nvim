@@ -1,5 +1,6 @@
 local M = {
   name = 'v1',
+  probe_rank = 2,
   health_path = '/global/health',
   operations = 'opencode.protocols.v1.operations',
   observation = 'opencode.protocols.v1.observation',
@@ -10,6 +11,7 @@ local M = {
 ---@param invalid_response fun(response: table|nil, endpoint: string): string
 ---@return table|nil body
 ---@return string|nil error
+---@return boolean|nil fallback
 function M.decode_probe(response, decode_json, invalid_response)
   local body, err = decode_json(response, M.health_path)
   if not body then
@@ -26,5 +28,7 @@ function M.decode_probe(response, decode_json, invalid_response)
   body.version = type(version) == 'string' and version or 'unknown'
   return body
 end
+
+require('opencode.protocols.registry').register(M)
 
 return M

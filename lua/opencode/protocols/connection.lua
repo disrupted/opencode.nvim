@@ -2,16 +2,19 @@ local Promise = require('opencode.promise')
 local curl = require('opencode.curl')
 local auth = require('opencode.auth')
 
-local adapters = {
-  v1 = require('opencode.protocols.v1.connection'),
-  v2 = require('opencode.protocols.v2.connection'),
-}
+local registry = require('opencode.protocols.registry')
+
+-- Built-in adapters register themselves on load.
+require('opencode.protocols.v1.connection')
+require('opencode.protocols.v2.connection')
 
 local M = {}
 
 ---@class OpencodeProtocolAdapter
----@field name 'v1'|'v2'
+---@field name string
 ---@field health_path string
+---@field probe_rank? integer Position in the HTTP probe order; omit to opt out of probing
+---@field decode_probe fun(response: table|nil, decode_json: function, invalid_response?: function): table|nil, string|nil, boolean|nil
 ---@field operations string
 ---@field observation string
 
@@ -84,45 +87,37 @@ end
 
 ---@param connection OpencodeServer
 ---@param timeout_ms? number
----@return Promise<{protocol: 'v1'|'v2', response: table}>
+---@return Promise<{protocol: string, response: table}>
 function M.probe(connection, timeout_ms)
   local result = Promise.new()
+  local order = registry.probe_order()
 
   local function reject_transport(err)
     result:reject({ kind = 'transport', cause = err })
   end
 
-  local function probe_v1()
-    local adapter = adapters.v1
+  local function probe_at(index)
+    local adapter = order[index]
     request(connection, adapter, timeout_ms, function(response)
-      local body, err = adapter.decode_probe(response, decode_json, invalid_response)
-      if not body then
+      local body, err, fallback = adapter.decode_probe(response, decode_json, invalid_response)
+      if fallback and order[index + 1] then
+        probe_at(index + 1)
+      elseif not body then
         result:reject(err)
-        return
+      else
+        result:resolve({ protocol = adapter.name, response = body })
       end
-      result:resolve({ protocol = adapter.name, response = body })
     end, reject_transport)
   end
 
-  local adapter = adapters.v2
-  request(connection, adapter, timeout_ms, function(response)
-    local body, err, fallback = adapter.decode_probe(response, decode_json)
-    if fallback then
-      probe_v1()
-    elseif not body then
-      result:reject(err)
-    else
-      result:resolve({ protocol = adapter.name, response = body })
-    end
-  end, reject_transport)
-
+  probe_at(1)
   return result
 end
 
----@param protocol 'v1'|'v2'
+---@param protocol string
 ---@return OpencodeProtocolRuntime|nil
 function M.runtime(protocol)
-  local adapter = adapters[protocol]
+  local adapter = registry.get(protocol)
   if not adapter then
     return nil
   end
@@ -135,7 +130,7 @@ end
 ---@param connection OpencodeServer
 ---@return Promise<boolean>
 function M.check_health(connection)
-  local adapter = adapters[connection.protocol]
+  local adapter = registry.get(connection.protocol)
   if not adapter then
     return Promise.new():resolve(false)
   end

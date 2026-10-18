@@ -9,7 +9,7 @@ local protocol_connection = require('opencode.protocols.connection')
 ---@field url string|nil The server URL once ready
 ---@field port number|nil The port this server is using (for custom servers)
 ---@field handle integer|nil Compatibility property for job.stop interface
----@field protocol? 'v1'|'v2' Protocol selected by authenticated health probe
+---@field protocol? string Protocol selected by authenticated health probe
 ---@field version? string Server version returned by the selected health endpoint
 ---@field server_identity? {version: string, pid: integer|nil} Identity facts returned by the probe or acquisition
 ---@field credential? {username: string, password?: string} Credential owned by this connection
@@ -203,7 +203,7 @@ end
 
 --- Probe protocol using authenticated health endpoints.
 ---@param timeout_ms number|nil
----@return Promise<{protocol: 'v1'|'v2', response: table}>
+---@return Promise<{protocol: string, response: table}>
 function OpencodeServer:probe_connection(timeout_ms)
   return protocol_connection.probe(self, timeout_ms)
 end
