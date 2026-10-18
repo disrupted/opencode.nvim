@@ -1,32 +1,44 @@
 local M = {}
 
----Pi's own scale; `off` is a real level, so it is offered instead of being folded into "no variant".
-M.thinking_levels = { 'off', 'minimal', 'low', 'medium', 'high', 'xhigh' }
+---Pi only reports levels for its current model, so other models expose `reasoning` without a variant list.
+---@param model OpencodePiModel
+---@param levels? string[] Supported levels when `model` is the current one
+---@return table<string, table>|nil
+local function variants_for(model, levels)
+  if not (model.reasoning and levels and #levels > 1) then
+    return nil
+  end
+  local variants = {}
+  for _, level in ipairs(levels) do
+    variants[level] = {}
+  end
+  return variants
+end
 
 ---@param model OpencodePiModel
+---@param current? OpencodePiModel
+---@param levels? string[]
 ---@return table
-local function catalog_model(model)
-  local variants
-  if model.reasoning then
-    variants = {}
-    for _, level in ipairs(M.thinking_levels) do
-      variants[level] = {}
-    end
-  end
+local function catalog_model(model, current, levels)
+  local is_current = current ~= nil and current.provider == model.provider and current.id == model.id
   return {
     id = model.id,
     name = model.name or model.id,
     providerID = model.provider,
     reasoning = model.reasoning == true,
     limit = { context = model.contextWindow or 0, output = model.maxTokens or 0 },
-    variants = variants,
+    variants = is_current and variants_for(model, levels) or nil,
   }
 end
 
 ---@param models OpencodePiModel[]
+---@param current? OpencodePiModel
+---@param levels? string[] Levels supported by `current`
 ---@return table[] models Flat list in the shape of v2 `list_models`
-function M.models(models)
-  return vim.tbl_map(catalog_model, models)
+function M.models(models, current, levels)
+  return vim.tbl_map(function(model)
+    return catalog_model(model, current, levels)
+  end, models)
 end
 
 ---@param models OpencodePiModel[]
@@ -47,8 +59,9 @@ end
 
 ---@param models OpencodePiModel[]
 ---@param current? OpencodePiModel
+---@param levels? string[] Levels supported by `current`
 ---@return {providers: table[], default: table<string, string>}
-function M.catalog(models, current)
+function M.catalog(models, current, levels)
   local providers = M.providers(models)
   local by_id = {}
   for _, provider in ipairs(providers) do
@@ -56,7 +69,7 @@ function M.catalog(models, current)
     by_id[provider.id] = provider
   end
   for _, model in ipairs(models) do
-    by_id[model.provider].models[model.id] = catalog_model(model)
+    by_id[model.provider].models[model.id] = catalog_model(model, current, levels)
   end
   local default = {}
   if current then

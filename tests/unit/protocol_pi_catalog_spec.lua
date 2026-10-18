@@ -18,14 +18,26 @@ describe('pi catalog', function()
     assert.same({ openai = 'gpt' }, result.default)
   end)
 
-  it('offers thinking levels only on reasoning models', function()
-    local result = catalog.catalog(models)
-    local variants = result.providers[1].models.sonnet.variants
-    assert.same({}, variants.off)
-    assert.is_truthy(variants.xhigh)
+  it('lists only the levels pi reports for the current model, including max', function()
+    local result = catalog.catalog(models, models[1], { 'off', 'low', 'max' })
+    local sonnet = result.providers[1].models.sonnet
+    assert.same({ 'low', 'max', 'off' }, vim.fn.sort(vim.tbl_keys(sonnet.variants)))
+    assert.is_nil(sonnet.variants.xhigh)
+    assert.equals(200000, sonnet.limit.context)
+  end)
+
+  it('does not guess levels for models that are not current', function()
+    local result = catalog.catalog(models, models[2], { 'off' })
+    local sonnet = result.providers[1].models.sonnet
+    assert.is_true(sonnet.reasoning)
+    assert.is_nil(sonnet.variants)
+    assert.same({}, catalog.catalog(models).default)
+  end)
+
+  it('offers no variants when the current model only supports off', function()
+    local result = catalog.catalog(models, models[1], { 'off' })
+    assert.is_nil(result.providers[1].models.sonnet.variants)
     assert.is_nil(result.providers[1].models.haiku.variants)
-    assert.same({}, result.default)
-    assert.equals(200000, result.providers[1].models.sonnet.limit.context)
   end)
 
   it('reads the current model and thinking level from pi state', function()

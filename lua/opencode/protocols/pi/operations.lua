@@ -25,6 +25,7 @@ local function live_session(pi_state, location)
     title = '',
     location = location or { directory = vim.fn.getcwd() },
     time = { created = now, updated = now },
+    model = catalog.current_model(pi_state),
   }
 end
 
@@ -54,6 +55,12 @@ local function current_state(connection)
   return pi_state
 end
 
+---The current model decides which variants exist, so cached catalogs go stale whenever it may have changed.
+---@param connection OpencodePiConnection
+local function invalidate_catalog(connection)
+  connection.catalog_revision = (connection.catalog_revision or 0) + 1
+end
+
 ---Pi has one live session; operating on another requires switching the process to it.
 ---@param connection OpencodePiConnection
 ---@param session_id string
@@ -72,6 +79,7 @@ local function ensure_active(connection, session_id)
     error('Pi refused to switch session', 0)
   end
   connection.pi.session_id = session_id
+  invalidate_catalog(connection)
   return current_state(connection)
 end
 
@@ -86,22 +94,52 @@ local function revive()
   return handle:restart()
 end
 
+---@param connection OpencodePiConnection
+---@param session_id string
+---@param pi_state OpencodePiState
+local function emit_selection(connection, session_id, pi_state)
+  local model = catalog.current_model(pi_state)
+  if not model then
+    return
+  end
+  invalidate_catalog(connection)
+  vim.schedule(function()
+    vim.api.nvim_exec_autocmds('User', {
+      pattern = 'OpencodeEvent:session.model.selected',
+      data = {
+        event = { type = 'session.model.selected', properties = { sessionID = session_id, model = model } },
+      },
+    })
+  end)
+end
+
 ---Skips requests that would not change anything, so a plain prompt costs no extra round trips.
+---Pi clamps unsupported levels without saying so, so what is in effect is read back and announced.
+---@param connection OpencodePiConnection
+---@param session_id string
 ---@param provider? string
 ---@param model_id? string
 ---@param variant? string
-local function apply_selection(provider, model_id, variant)
+---@return OpencodePiState pi_state
+local function apply_selection(connection, session_id, provider, model_id, variant)
   local client = process.get()
   local pi_state = client:get_state():await()
-  local changed = false
+  local touched = false
   local current = pi_state.model
   if provider and model_id and (not current or current.provider ~= provider or current.id ~= model_id) then
     client:set_model(provider, model_id):await()
-    changed = true
+    touched = true
   end
-  if variant and (changed or variant ~= pi_state.thinkingLevel) then
+  if variant and (touched or variant ~= pi_state.thinkingLevel) then
     client:set_thinking_level(variant):await()
+    touched = true
   end
+  if not touched then
+    return pi_state
+  end
+  pi_state = client:get_state():await()
+  emit_selection(connection, session_id, pi_state)
+  return pi_state
 end
 
 function M.list_sessions(_, location)
@@ -135,6 +173,7 @@ M.create_session = Promise.async(function(connection, location)
   if client:new_session():await().cancelled then
     error('Pi refused to start a new session', 0)
   end
+  invalidate_catalog(connection)
   return live_session(current_state(connection), location)
 end)
 
@@ -169,7 +208,7 @@ M.submit = Promise.async(function(connection, session_id, input)
   revive():await()
   local pi_state = ensure_active(connection, session_id)
   local model = input.model
-  apply_selection(model and model.providerID, model and model.modelID, input.variant)
+  apply_selection(connection, session_id, model and model.providerID, model and model.modelID, input.variant)
   ---@type 'steer'|'followUp'|false
   local behavior = false
   if pi_state.isStreaming then
@@ -192,13 +231,15 @@ end)
 ---@param model OpencodeV2ModelInput
 M.set_session_model = Promise.async(function(connection, session_id, model)
   ensure_active(connection, session_id)
-  apply_selection(model.providerID, model.id, model.variant)
+  apply_selection(connection, session_id, model.providerID, model.id, model.variant)
   return true
 end)
 
+---@return string level What pi settled on, which differs from `level` when the model does not support it
 M.set_thinking_level = Promise.async(function(_, level)
-  process.get():set_thinking_level(level):await()
-  return level
+  local client = process.get()
+  client:set_thinking_level(level):await()
+  return client:get_state():await().thinkingLevel or level
 end)
 
 M.cycle_thinking_level = Promise.async(function()
@@ -209,13 +250,28 @@ M.cycle_thinking_level = Promise.async(function()
   return result.level
 end)
 
-M.cycle_model = Promise.async(function()
-  local result = process.get():cycle_model():await()
+M.cycle_model = Promise.async(function(connection)
+  local client = process.get()
+  local result = client:cycle_model():await()
   if not result.model then
     error('No other model to cycle to', 0)
   end
-  return { providerID = result.model.provider, id = result.model.id, variant = result.thinkingLevel }
+  invalidate_catalog(connection)
+  local effective = client:get_state():await().thinkingLevel or result.thinkingLevel
+  return { providerID = result.model.provider, id = result.model.id, variant = effective }
 end)
+
+---Levels are only known for the model pi currently runs.
+---@return OpencodePiModel[] models
+---@return OpencodePiModel? current
+---@return string[]? levels
+local function models_with_levels()
+  local client = process.get()
+  local models = client:get_available_models():await().models
+  local current = client:get_state():await().model
+  local levels = current and client:get_available_thinking_levels():await().levels
+  return models, current, levels
+end
 
 ---@return Promise<OpencodePiModel[]>
 local function available_models()
@@ -224,9 +280,9 @@ local function available_models()
   end)
 end
 
-function M.list_models()
-  return available_models():and_then(catalog.models)
-end
+M.list_models = Promise.async(function()
+  return catalog.models(models_with_levels())
+end)
 
 function M.list_providers(_, location)
   return available_models():and_then(function(models)
@@ -235,8 +291,7 @@ function M.list_providers(_, location)
 end
 
 M.get_model_catalog = Promise.async(function()
-  local models = available_models():await()
-  return catalog.catalog(models, process.get():get_state():await().model)
+  return catalog.catalog(models_with_levels())
 end)
 
 M.get_default_model = Promise.async(function()
@@ -278,7 +333,7 @@ M.send_command = Promise.async(function(connection, session_id, _, input)
       error('Pi send_command model must use provider/model format', 0)
     end
   end
-  apply_selection(provider, model_id, input.variant)
+  apply_selection(connection, session_id, provider, model_id, input.variant)
   local text = '/' .. input.command
   if input.arguments and input.arguments ~= '' then
     text = text .. ' ' .. input.arguments

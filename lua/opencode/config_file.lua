@@ -8,11 +8,14 @@ local M = {
   providers_promise = nil,
 }
 local cache_connection
+local cache_revision
 
 local function sync_cache_connection()
   local connection = require('opencode.state').opencode_server
-  if connection ~= cache_connection then
+  local revision = connection and connection.catalog_revision
+  if connection ~= cache_connection or revision ~= cache_revision then
     cache_connection = connection
+    cache_revision = revision
     M.config_promise = nil
     M.project_promise = nil
     M.providers_promise = nil

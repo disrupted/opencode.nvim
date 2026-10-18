@@ -47,7 +47,47 @@ local counts = {}
 local new_sessions = 0
 local models = script.models or {}
 ---@type string[]
-local thinking_levels = { 'off', 'minimal', 'low', 'medium', 'high', 'xhigh' }
+local thinking_scale = { 'off', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max' }
+
+---`script.levels["provider/id"]` overrides the default: every reasoning model but `max`, others only `off`.
+---@param model? table
+---@return string[]
+local function supported_levels(model)
+  local listed = model and script.levels and script.levels[model.provider .. '/' .. model.id]
+  if listed then
+    return listed
+  end
+  if model and model.reasoning then
+    return { 'off', 'minimal', 'low', 'medium', 'high', 'xhigh' }
+  end
+  return { 'off' }
+end
+
+local function scale_position(level)
+  for i, name in ipairs(thinking_scale) do
+    if name == level then
+      return i
+    end
+  end
+  return 1
+end
+
+---Like pi, an unsupported level is silently replaced by the closest supported one (lower wins a tie).
+---@param model? table
+---@param level? string
+---@return string?
+local function clamp(model, level)
+  local supported = supported_levels(model)
+  local wanted = scale_position(level or 'off')
+  local best, distance
+  for _, candidate in ipairs(supported) do
+    local d = math.abs(scale_position(candidate) - wanted)
+    if not distance or d < distance then
+      best, distance = candidate, d
+    end
+  end
+  return best
+end
 
 local function find_model(provider, id)
   for _, model in ipairs(models) do
@@ -166,6 +206,7 @@ local function handle(command)
       local model = find_model(command.provider, command.modelId)
       if model then
         state.model, data = model, model
+        state.thinkingLevel = clamp(model, state.thinkingLevel)
       else
         failure = 'unknown model: ' .. tostring(command.modelId)
       end
@@ -179,16 +220,20 @@ local function handle(command)
             end)
           or 0
         state.model = models[at % #models + 1]
-        data = { model = state.model, thinkingLevel = state.thinkingLevel or 'off', isScoped = false }
+        state.thinkingLevel = clamp(state.model, state.thinkingLevel)
+        data = { model = state.model, thinkingLevel = state.thinkingLevel, isScoped = false }
       end
     elseif command.type == 'set_thinking_level' then
-      state.thinkingLevel = command.level
+      state.thinkingLevel = clamp(state.model, command.level)
+    elseif command.type == 'get_available_thinking_levels' then
+      data = { levels = supported_levels(state.model) }
     elseif command.type == 'cycle_thinking_level' then
-      if state.model and state.model.reasoning then
-        local at = index_of(thinking_levels, function(level)
+      local supported = supported_levels(state.model)
+      if #supported > 1 then
+        local at = index_of(supported, function(level)
           return level == (state.thinkingLevel or 'off')
         end) or 0
-        state.thinkingLevel = thinking_levels[at % #thinking_levels + 1]
+        state.thinkingLevel = supported[at % #supported + 1]
         data = { level = state.thinkingLevel }
       end
     elseif command.type == 'get_commands' then

@@ -15,6 +15,7 @@ local protocol_connection = require('opencode.protocols.connection')
 ---@field server_identity? {version: string, pid: integer|nil} Identity facts returned by the probe or acquisition
 ---@field credential? {username: string, password?: string} Credential owned by this connection
 ---@field operations? OpencodeV1Operations|OpencodeV2Operations|OpencodePiOperations Protocol operations selected when the connection becomes ready
+---@field catalog_revision? integer Bumped when the model catalog (e.g. variants of the current model) may have changed
 ---@field observations table<string, OpencodeObservation?> Observations owned by this connection
 ---@field shutdown_promise Promise<boolean>
 ---@field private _ready boolean

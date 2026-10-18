@@ -61,6 +61,7 @@
 ---@field cycle_model fun(self: OpencodePiClient): Promise<{model: OpencodePiModel, thinkingLevel: string}|nil>
 ---@field set_thinking_level fun(self: OpencodePiClient, level: string): Promise<any>
 ---@field cycle_thinking_level fun(self: OpencodePiClient): Promise<{level: string}|nil>
+---@field get_available_thinking_levels fun(self: OpencodePiClient): Promise<{levels: string[]}>
 ---@field get_commands fun(self: OpencodePiClient): Promise<{commands: OpencodePiCommand[]}>
 ---@field set_session_name fun(self: OpencodePiClient, name: string): Promise<any>
 ---@field compact fun(self: OpencodePiClient): Promise<table>

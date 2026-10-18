@@ -19,6 +19,7 @@ describe('pi backend with the shared model and variant pickers', function()
         { id = 'opus', name = 'Opus', provider = 'anthropic', reasoning = true },
         { id = 'gpt', name = 'GPT', provider = 'openai', reasoning = false },
       },
+      levels = { ['anthropic/sonnet'] = { 'off', 'low', 'high', 'max' } },
     })
     saved_backend = config.values.backend
     config.values.backend = 'pi'
@@ -62,9 +63,42 @@ describe('pi backend with the shared model and variant pickers', function()
     local variants = vim.tbl_map(function(item)
       return item.name
     end, picked.items)
-    assert.is_truthy(vim.tbl_contains(variants, 'off'))
-    assert.is_truthy(vim.tbl_contains(variants, 'high'))
     assert.equals('default', variants[1])
+    assert.same({ 'high', 'low', 'max', 'off' }, vim.fn.sort({ unpack(variants, 2) }))
+  end)
+
+  local function variant_names()
+    picked = nil
+    variant_picker.select(function() end):wait()
+    if not picked then
+      return nil
+    end
+    local names = vim.tbl_map(function(item)
+      return item.name
+    end, picked.items)
+    assert.equals('default', table.remove(names, 1))
+    return vim.fn.sort(names)
+  end
+
+  local function switch_pi_to(provider, id)
+    local connection = state.opencode_server
+    connection.operations.set_session_model(connection, 's', { providerID = provider, id = id }):wait()
+  end
+
+  it('refreshes the variants when the model changes', function()
+    state.model.set_model('anthropic/opus')
+    assert.is_nil(variant_names())
+    switch_pi_to('anthropic', 'opus')
+    assert.same({ 'high', 'low', 'medium', 'minimal', 'off', 'xhigh' }, variant_names())
+    switch_pi_to('anthropic', 'sonnet')
+    state.model.set_model('anthropic/sonnet')
+    assert.same({ 'high', 'low', 'max', 'off' }, variant_names())
+  end)
+
+  it('offers no variants after switching to a non-reasoning model', function()
+    switch_pi_to('openai', 'gpt')
+    state.model.set_model('openai/gpt')
+    assert.is_nil(variant_names())
   end)
 
   it('does not offer variants for a model without reasoning', function()

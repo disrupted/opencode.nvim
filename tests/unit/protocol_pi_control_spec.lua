@@ -140,8 +140,8 @@ describe('pi control surface over a fake pi process', function()
           variant = 'medium',
         })
         :wait()
-      assert.same({ 'get_state', 'get_state', 'set_model', 'set_thinking_level', 'prompt' }, {
-        unpack(types_received(), #types_received() - 4),
+      assert.same({ 'get_state', 'get_state', 'set_model', 'set_thinking_level', 'get_state', 'prompt' }, {
+        unpack(types_received(), #types_received() - 5),
       })
     end)
 
@@ -150,6 +150,76 @@ describe('pi control surface over a fake pi process', function()
       assert.equals('high', ops().set_thinking_level(connection, 'high'):wait())
       assert.equals('high', ctx:received_of('set_thinking_level')[1].level)
       assert.equals('xhigh', ops().cycle_thinking_level(connection):wait())
+    end)
+
+    it('returns the level pi clamped an unsupported request to', function()
+      open({
+        models = { sonnet },
+        state = { sessionId = 's', model = sonnet, thinkingLevel = 'off' },
+        levels = { ['anthropic/sonnet'] = { 'off', 'low', 'high' } },
+      })
+      assert.equals('high', ops().set_thinking_level(connection, 'xhigh'):wait())
+    end)
+
+    it('lists max only when the current model supports it', function()
+      open({
+        models = { sonnet, gpt },
+        state = { sessionId = 's', model = sonnet, thinkingLevel = 'off' },
+        levels = { ['anthropic/sonnet'] = { 'off', 'high', 'max' } },
+      })
+      local function variants_of(id)
+        for _, model in ipairs(ops().list_models(connection, location()):wait()) do
+          if model.id == id then
+            return model.variants
+          end
+        end
+      end
+      assert.same({ 'high', 'max', 'off' }, vim.fn.sort(vim.tbl_keys(variants_of('sonnet'))))
+      assert.is_nil(variants_of('gpt'))
+    end)
+
+    it('refreshes the current model levels after the model changes', function()
+      open({
+        models = { sonnet, gpt },
+        state = { sessionId = 's', model = sonnet, thinkingLevel = 'off' },
+        levels = { ['anthropic/sonnet'] = { 'off', 'high' } },
+      })
+      local before = connection.catalog_revision or 0
+      ops().set_session_model(connection, 's', { providerID = 'openai', id = 'gpt' }):wait()
+      assert.is_true(connection.catalog_revision > before)
+      for _, model in ipairs(ops().list_models(connection, location()):wait()) do
+        assert.is_nil(model.variants)
+      end
+    end)
+
+    it('does not report a level that selecting the model clamped away', function()
+      open({
+        models = { sonnet, gpt },
+        state = { sessionId = 's', model = sonnet, thinkingLevel = 'high' },
+        levels = { ['anthropic/sonnet'] = { 'off', 'high' }, ['openai/gpt'] = { 'off', 'low' } },
+      })
+      local seen
+      vim.api.nvim_create_autocmd('User', {
+        pattern = 'OpencodeEvent:session.model.selected',
+        once = true,
+        callback = function(args)
+          seen = args.data.event.properties.model
+        end,
+      })
+      ops().set_session_model(connection, 's', { providerID = 'openai', id = 'gpt', variant = 'high' }):wait()
+      wait_for(function()
+        return seen ~= nil
+      end)
+      assert.same({ providerID = 'openai', id = 'gpt', variant = 'low' }, seen)
+    end)
+
+    it('returns the effective level when cycling models', function()
+      open({
+        models = { sonnet, gpt },
+        state = { sessionId = 's', model = sonnet, thinkingLevel = 'high' },
+        levels = { ['openai/gpt'] = { 'off', 'low' } },
+      })
+      assert.same({ providerID = 'openai', id = 'gpt', variant = 'low' }, ops().cycle_model(connection):wait())
     end)
 
     it('says so when the model has no thinking levels to cycle', function()
@@ -164,7 +234,7 @@ describe('pi control surface over a fake pi process', function()
 
     it('cycles models and says so when there is nothing to cycle to', function()
       open({ models = { sonnet, gpt }, state = { sessionId = 's', model = sonnet, thinkingLevel = 'low' } })
-      assert.same({ providerID = 'openai', id = 'gpt', variant = 'low' }, ops().cycle_model(connection):wait())
+      assert.same({ providerID = 'openai', id = 'gpt', variant = 'off' }, ops().cycle_model(connection):wait())
       ctx:stop()
       open({ models = { gpt } })
       assert.matches(

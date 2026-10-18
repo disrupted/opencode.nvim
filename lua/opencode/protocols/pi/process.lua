@@ -279,6 +279,10 @@ function Client:set_thinking_level(level)
   return self:request({ type = 'set_thinking_level', level = level })
 end
 
+function Client:get_available_thinking_levels()
+  return self:request({ type = 'get_available_thinking_levels' })
+end
+
 function Client:cycle_thinking_level()
   return self:request({ type = 'cycle_thinking_level' })
 end
