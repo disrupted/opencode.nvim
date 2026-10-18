@@ -127,7 +127,7 @@ Re-apply each as its own commit, ideally additive files rather than edits to ups
 | Feature | Current location | Notes |
 | --- | --- | --- |
 | Markdown table rendering | `ui/markdown_table.lua` (743 lines) | check whether upstream's formatter now covers it; upstream it if not |
-| Image preview / image support | `ui/image_preview.lua`, `image_handler` changes | compare with upstream's `image_handler` first |
+| Image preview / image support (deferred, out of scope for now) | `ui/image_preview.lua`, `image_handler` changes | compare with upstream's `image_handler` first |
 | `vanilla` commands | `commands/handlers/vanilla.lua` | registers via upstream dispatcher |
 | Pi extension commands (`get_commands`, slash) | `commands/*`, `prompt_adapter.lua` | map into upstream `list_commands` |
 | `pin` and `bin/` scripts | `lua/pi/pin.lua`, `bin/` | fork-owned, additive |
@@ -180,7 +180,7 @@ Also required:
 - Model and thinking-level pickers; set/cycle model.
 - Slash commands including Pi extension commands; skill completion.
 - Queued (steer/follow-up) messages shown.
-- Images attach and preview; `@` file mentions and context bar.
+- `@` file mentions and context bar (as plain context text). Image attachments and preview are deferred.
 - Permissions/questions via extension UI where supported; clear message where not.
 - Auto session naming updates the title.
 - `backend = 'opencode'` still works unchanged against an opencode server (regression guard).
@@ -188,7 +188,7 @@ Also required:
 ## Fork-owned inventory (what the fork must keep carrying)
 
 Backend (moves under `protocols/pi/`): `pi_process`, `rpc_client`, `pi_server`, `pi_sessions`, `event_adapter`, `prompt_adapter`, Pi branches of `api_client`/`event_manager`.
-Additive features: `markdown_table`, `image_preview`, `vanilla` commands, `pin`, `lsp/pi_ls`, `extensions/`, `bin/`, `ftplugin/pi*.lua`, `plugin/pi.lua`, `lua/pi/init.lua`.
+Additive features: `markdown_table`, `image_preview` (deferred), `vanilla` commands, `pin`, `lsp/pi_ls`, `extensions/`, `bin/`, `ftplugin/pi*.lua`, `plugin/pi.lua`, `lua/pi/init.lua`.
 Core patches to upstream files: P1–P4 only.
 
 Keep this list current. If a change touches an upstream file outside P1–P4, it needs a justification in the commit body and an upstream-PR note.
