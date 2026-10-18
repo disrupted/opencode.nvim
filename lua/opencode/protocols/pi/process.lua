@@ -36,6 +36,7 @@ end
 ---@field exited boolean
 ---@field stopping boolean
 ---@field stdout_buffer string
+---@field generation integer Distinguishes a restarted job from the stopped one whose callbacks may still arrive
 ---@field on_line fun(line: string)
 ---@field on_exit fun()
 local Process = {}
@@ -46,7 +47,7 @@ Process.__index = Process
 ---@return OpencodePiProcess
 function Process.new(on_line, on_exit)
   return setmetatable(
-    { exited = false, stopping = false, stdout_buffer = '', on_line = on_line, on_exit = on_exit },
+    { exited = false, stopping = false, stdout_buffer = '', generation = 0, on_line = on_line, on_exit = on_exit },
     Process
   )
 end
@@ -80,12 +81,16 @@ function Process:start()
   end
 
   self.exited, self.stopping, self.stdout_buffer = false, false, ''
+  self.generation = self.generation + 1
+  local generation = self.generation
   local job_id = vim.fn.jobstart(command, {
     cwd = vim.fn.getcwd(),
     stdin = 'pipe',
     on_stdout = function(_, data)
       vim.schedule(function()
-        self:_feed(data)
+        if generation == self.generation then
+          self:_feed(data)
+        end
       end)
     end,
     on_stderr = function(_, data)
@@ -96,9 +101,14 @@ function Process:start()
     end,
     on_exit = function(_, code)
       vim.schedule(function()
+        if generation ~= self.generation then
+          emit({ type = 'process_exit', code = code, expected = true })
+          return
+        end
+        local expected = self.stopping
         self.exited, self.job_id = true, nil
         self.on_exit()
-        emit({ type = 'process_exit', code = code, expected = self.stopping })
+        emit({ type = 'process_exit', code = code, expected = expected })
       end)
     end,
   })
@@ -128,6 +138,7 @@ function Process:stop()
     pcall(vim.fn.chanclose, self.job_id, 'stdin')
     pcall(vim.fn.jobstop, self.job_id)
     self.job_id = nil
+    self.on_exit()
   end
 end
 
