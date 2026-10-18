@@ -142,7 +142,7 @@ local function assistant_content(message, entry)
 end
 
 ---@param entry table
-local function assign_content_ids(entry)
+function M.assign_content_ids(entry)
   local ordinals = {}
   for _, content in ipairs(entry.content) do
     local key = content.kind == 'tool' and content.call_id or (ordinals[content.kind] or 0)
@@ -163,14 +163,15 @@ end
 ---@param message OpencodePiMessage
 ---@param session_id string
 ---@param index integer
+---@param id? string Pins the identity of a message whose snapshots arrive without a stable key
 ---@return table|nil entry nil for roles the UI has no entry for
-function M.entry(message, session_id, index)
+function M.entry(message, session_id, index, id)
   local role = message.role == 'toolResult' and 'assistant' or message.role
   if role ~= 'user' and role ~= 'assistant' then
     return nil
   end
   local entry = {
-    id = M.message_id(message.role, message, index),
+    id = id or M.message_id(message.role, message, index),
     session_id = session_id,
     kind = role,
     time = { created = type(message.timestamp) == 'number' and message.timestamp or nil },
@@ -190,7 +191,7 @@ function M.entry(message, session_id, index)
     end
     assistant_content(message, entry)
   end
-  assign_content_ids(entry)
+  M.assign_content_ids(entry)
   return entry
 end
 
@@ -217,7 +218,9 @@ function M.entries(messages, session_id)
   ---@type table<string, table>
   local calls = {}
   for index, message in ipairs(messages) do
-    local call = message.role == 'toolResult' and calls[message.toolCallId --[[@as string]]]
+    local call = message.role == 'toolResult' and calls[
+      message.toolCallId --[[@as string]]
+    ]
     if call then
       M.apply_tool_result(call, message)
     else

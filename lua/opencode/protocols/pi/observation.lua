@@ -14,6 +14,8 @@ local UNSUPPORTED = 'Pi has no equivalent'
 ---@field _connection OpencodePiConnection
 ---@field _pi_pending_inputs string[] Input ids awaiting the user message pi echoes back
 ---@field _pi_admissions table<string, fun(value?: table, err?: string)>
+---@field _pi_live table<string, string> Entry id of the message currently streaming, per role; pi snapshots carry no id
+---@field _pi_stop? {reason?: string, message?: string} How the latest assistant message ended
 ---@field submit fun(self: OpencodePiObservation, input: OpencodeV2SubmitInput, selected?: table, on_input_id?: fun(id: string)): Promise<OpencodeSubmission>
 ---@field interrupt fun(self: OpencodePiObservation): Promise<boolean>
 ---@field load_older fun(self: OpencodePiObservation): Promise<nil>
@@ -73,16 +75,51 @@ local function request_resource(observation, resource)
 end
 
 ---@param observation OpencodePiObservation
+---@return table<string, table?>
+local function tool_parts(observation)
+  local state = observation:read()
+  return normalize.index_tool_parts(vim.tbl_map(function(entry_id)
+    return state.entries_by_id[entry_id]
+  end, state.entry_order))
+end
+
+---@param observation OpencodePiObservation
 ---@param message OpencodePiMessage
-local function message_event(observation, message)
-  local index = #observation:read().entry_order + 1
-  local entry = normalize.entry(message, observation._session_id, index)
+---@param phase 'start'|'update'|'end'
+local function message_event(observation, message, phase)
+  if message.role == 'toolResult' then
+    local part = tool_parts(observation)[
+      message.toolCallId --[[@as string]]
+    ]
+    if part then
+      normalize.apply_tool_result(part, message)
+      observation:_event_changed('messages')
+      return
+    end
+  end
+
+  local role = message.role
+  if phase == 'start' then
+    observation._pi_live[role] = nil
+  end
+  local live_id = observation._pi_live[role]
+  local entry = normalize.entry(message, observation._session_id, #observation:read().entry_order + 1, live_id)
   if not entry then
     return
   end
-  if message.role == 'user' then
-    -- The prompt was shown under the id this client generated; keep that identity.
-    entry.id = table.remove(observation._pi_pending_inputs, 1) or entry.id
+  if not live_id then
+    if role == 'user' then
+      -- The prompt was shown under the id this client generated; keep that identity.
+      entry.id = table.remove(observation._pi_pending_inputs, 1) or entry.id
+      normalize.assign_content_ids(entry)
+    end
+    observation._pi_live[role] = entry.id
+  end
+  if phase == 'end' then
+    observation._pi_live[role] = nil
+    if role == 'assistant' then
+      observation._pi_stop = { reason = message.stopReason, message = message.errorMessage }
+    end
   end
   put_entry(observation, entry)
   observation:_event_changed('messages')
@@ -91,10 +128,7 @@ end
 ---@param observation OpencodePiObservation
 ---@param event table
 local function tool_event(observation, event)
-  local state = observation:read()
-  local part = normalize.index_tool_parts(vim.tbl_map(function(entry_id)
-    return state.entries_by_id[entry_id]
-  end, state.entry_order))[event.toolCallId]
+  local part = tool_parts(observation)[event.toolCallId]
   if part then
     normalize.apply_tool_execution(part, event)
     observation:_event_changed('messages')
@@ -102,44 +136,66 @@ local function tool_event(observation, event)
 end
 
 ---@param observation OpencodePiObservation
----@param running boolean
-local function set_activity(observation, running)
+---@param outcome? 'succeeded'|'failed'|'interrupted' Set when the run ended
+---@param err? {message: string}
+local function set_activity(observation, outcome, err)
   local execution = observation:read().execution
-  execution.activity = running and 'running' or 'idle'
-  if not running then
-    execution.last_outcome = 'succeeded'
-    execution.last_idle = vim.uv.now()
+  execution.activity = outcome and 'idle' or 'running'
+  if outcome then
+    execution.last_outcome, execution.error, execution.last_idle = outcome, err, vim.uv.now()
   end
   observation:_event_changed('execution')
+end
+
+---@param observation OpencodePiObservation
+---@param outcome 'succeeded'|'failed'|'interrupted'
+---@param err? {message: string}
+local function finish_run(observation, outcome, err)
+  set_activity(observation, outcome, err)
+  observation._pi_live, observation._pi_stop = {}, nil
+  local pending = observation._pi_admissions
+  observation._pi_admissions = {}
+  for _, finish in pairs(pending) do
+    finish({ kind = 'session_idle', outcome = outcome, idle_at = vim.uv.now(), error = err })
+  end
 end
 
 ---@type table<string, (fun(observation: OpencodePiObservation, event: table))?>
 local handlers = {
   agent_start = function(observation)
-    set_activity(observation, true)
+    observation._pi_stop = nil
+    set_activity(observation)
   end,
   agent_settled = function(observation)
-    set_activity(observation, false)
-    local pending = observation._pi_admissions
-    observation._pi_admissions = {}
-    for _, finish in pairs(pending) do
-      finish({ kind = 'session_idle', outcome = 'succeeded', idle_at = vim.uv.now() })
+    local stop = observation._pi_stop
+    if stop and stop.reason == 'aborted' then
+      finish_run(observation, 'interrupted')
+    elseif stop and stop.reason == 'error' then
+      finish_run(observation, 'failed', { message = stop.message or 'Pi stopped with an error' })
+    else
+      finish_run(observation, 'succeeded')
     end
   end,
   message_start = function(observation, event)
-    message_event(observation, event.message)
+    message_event(observation, event.message, 'start')
   end,
   message_update = function(observation, event)
-    message_event(observation, event.message)
+    message_event(observation, event.message, 'update')
   end,
   message_end = function(observation, event)
-    if event.message.role ~= 'toolResult' then
-      message_event(observation, event.message)
-    end
+    message_event(observation, event.message, 'end')
   end,
   tool_execution_start = tool_event,
   tool_execution_update = tool_event,
   tool_execution_end = tool_event,
+  process_exit = function(observation, event)
+    if event.expected then
+      return
+    end
+    local message = ('Pi process exited unexpectedly (code %s)'):format(tostring(event.code))
+    finish_run(observation, 'failed', { message = message })
+    observation._pi_pending_inputs = {}
+  end,
   session_info_changed = function(observation, event)
     local session = observation:read().session
     session.title = event.name
@@ -151,7 +207,9 @@ local handlers = {
 ---@param connection OpencodePiConnection
 ---@param event table
 local function route_event(connection, event)
-  local observation = connection.observations[connection.pi.session_id --[[@as string]]]
+  local observation = connection.observations[
+    connection.pi.session_id --[[@as string]]
+  ]
   local handler = handlers[event.type]
   if observation and handler then
     ---@cast observation OpencodePiObservation
@@ -231,6 +289,7 @@ function M.new(connection, ref)
   ---@cast observation OpencodePiObservation
   observation._pi_pending_inputs = {}
   observation._pi_admissions = {}
+  observation._pi_live = {}
   attach_actions(observation)
   return observation
 end
