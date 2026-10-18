@@ -106,6 +106,7 @@
 ---@field set_thinking_level fun(connection: OpencodePiConnection, level: string): Promise<string>
 ---@field cycle_thinking_level fun(connection: OpencodePiConnection): Promise<string>
 ---@field cycle_model fun(connection: OpencodePiConnection): Promise<OpencodeV2ModelReference>
+---@field select_model fun(connection: OpencodePiConnection, model: {providerID: string, id: string}): Promise<OpencodeV2ModelReference>
 ---@field send_command fun(connection: OpencodePiConnection, session_id: string, location: OpencodeLocation?, input: OpencodeV2CommandInput): Promise<boolean>
 ---@field submit fun(connection: OpencodePiConnection, session_id: string, input: OpencodePiSubmitInput, path_map?: OpencodeV2PathMap, reverse_path_map?: OpencodeV2PathMap): Promise<OpencodeV2Admission>
 ---@field interrupt fun(connection: OpencodePiConnection, session_id: string): Promise<boolean>

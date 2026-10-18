@@ -33,6 +33,37 @@ local function active_session_fact()
   return observation and observation:read().session or nil
 end
 
+---@param connection OpencodeServer
+---@return OpencodeOptionalOperations
+local function optional_operations(connection)
+  return connection.operations --[[@as OpencodeOptionalOperations]]
+end
+
+---A backend that runs one model itself must learn about the selection now, not at the next prompt.
+---Its answer is what is really in effect (e.g. a clamped level), so that is what gets mirrored locally.
+---Only an existing connection is used: without one there is nothing running to tell.
+---@param call fun(operations: OpencodeOptionalOperations, connection: OpencodeServer): Promise<OpencodeV2ModelReference|string>|nil
+local function push_selection(call)
+  local connection = state.opencode_server
+  local pending = connection and call(optional_operations(connection), connection)
+  if not pending then
+    return
+  end
+  Promise.async(function()
+    local ok, result = pcall(function()
+      return pending:await()
+    end)
+    if not ok then
+      log.notify(tostring(result), vim.log.levels.WARN)
+      return
+    end
+    local level = type(result) == 'table' and result.variant or result
+    if level ~= nil and state.current_variant ~= level then
+      state.model.set_variant(level)
+    end
+  end)()
+end
+
 ---Apply a selected model and remember it as the active mode's override.
 ---@param provider string
 ---@param model string
@@ -43,6 +74,9 @@ function M.set_model(provider, model)
   if state.current_mode then
     state.model.set_mode_model_override(state.current_mode, model_id)
   end
+  push_selection(function(operations, connection)
+    return operations.select_model and operations.select_model(connection, { providerID = provider, id = model })
+  end)
   return model_id
 end
 
@@ -57,12 +91,11 @@ function M.set_variant(variant)
   if provider and model then
     require('opencode.model_state').set_variant(provider, model, variant)
   end
-end
-
----@param connection OpencodeServer
----@return OpencodeOptionalOperations
-local function optional_operations(connection)
-  return connection.operations --[[@as OpencodeOptionalOperations]]
+  if variant then
+    push_selection(function(operations, connection)
+      return operations.set_thinking_level and operations.set_thinking_level(connection, variant)
+    end)
+  end
 end
 
 ---A backend that owns the thinking level and the model order picks the next one; the selection is only mirrored here.

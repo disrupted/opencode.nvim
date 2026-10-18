@@ -8,6 +8,8 @@ local protocol_connection = require('opencode.protocols.connection')
 ---@class OpencodeOptionalOperations
 ---@field cycle_model? fun(connection: OpencodeServer): Promise<OpencodeV2ModelReference>
 ---@field cycle_thinking_level? fun(connection: OpencodeServer): Promise<string>
+---@field select_model? fun(connection: OpencodeServer, model: {providerID: string, id: string}): Promise<OpencodeV2ModelReference>
+---@field set_thinking_level? fun(connection: OpencodeServer, level: string): Promise<string>
 
 ---@class OpencodeConnectionCapabilities
 ---@field single_agent? boolean There is no agent/mode to switch; the agent-mode key cycles models instead

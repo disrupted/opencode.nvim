@@ -633,6 +633,44 @@ describe('pi interactive surface over a fake pi process', function()
       end)
     end)
 
+    it('applies a model picked in the UI to pi and mirrors the level pi kept', function()
+      open_cycling({
+        state = { sessionId = 's', model = sonnet, thinkingLevel = 'high' },
+        models = { sonnet, gpt },
+        levels = { ['openai/gpt'] = { 'off', 'low' } },
+      })
+      state.model.set_variant('high')
+      agent_model.set_model('openai', 'gpt')
+      wait_for(function()
+        return state.current_variant == 'low'
+      end)
+      assert.equals('gpt', ctx:received_of('set_model')[1].modelId)
+      assert.equals('openai/gpt', state.current_model)
+    end)
+
+    it('applies a variant picked in the UI to pi and shows the clamped level', function()
+      open_cycling({
+        state = { sessionId = 's', model = sonnet, thinkingLevel = 'off' },
+        models = { sonnet },
+        levels = { ['anthropic/sonnet'] = { 'off', 'low', 'high' } },
+      })
+      state.model.set_model('anthropic/sonnet')
+      agent_model.set_variant('xhigh')
+      wait_for(function()
+        return state.current_variant == 'high'
+      end)
+      assert.equals('xhigh', ctx:received_of('set_thinking_level')[1].level)
+    end)
+
+    it('keeps a model pick local when the connection cannot select models', function()
+      open({ state = { sessionId = 's' } })
+      state.jobs.set_server({ operations = {} })
+      agent_model.set_model('openai', 'gpt')
+      assert.equals('openai/gpt', state.current_model)
+      assert.equals(0, #ctx:received_of('set_model'))
+      state.jobs.clear_server()
+    end)
+
     it('reports the single-agent capability only when the connection declares it', function()
       open_cycling({ state = { sessionId = 's' } })
       assert.is_true(agent_model.is_single_agent():wait())

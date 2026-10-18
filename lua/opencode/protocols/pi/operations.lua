@@ -242,6 +242,16 @@ M.set_thinking_level = Promise.async(function(_, level)
   return client:get_state():await().thinkingLevel or level
 end)
 
+---Pi only runs one model, so choosing one in the UI has to reach the process or variants and cycling describe the wrong model.
+---@param connection OpencodePiConnection
+---@param model {providerID: string, id: string}
+---@return OpencodeV2ModelReference
+M.select_model = Promise.async(function(connection, model)
+  local pi_state = current_state(connection)
+  local applied = apply_selection(connection, pi_state.sessionId --[[@as string]], model.providerID, model.id)
+  return catalog.current_model(applied) --[[@as OpencodeV2ModelReference]]
+end)
+
 M.cycle_thinking_level = Promise.async(function()
   local result = process.get():cycle_thinking_level():await()
   if not result.level then
