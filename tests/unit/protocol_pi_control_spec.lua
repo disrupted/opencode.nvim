@@ -188,7 +188,9 @@ describe('pi control surface over a fake pi process', function()
       ops().set_session_model(connection, 's', { providerID = 'openai', id = 'gpt' }):wait()
       assert.is_true(connection.catalog_revision > before)
       for _, model in ipairs(ops().list_models(connection, location()):wait()) do
-        assert.is_nil(model.variants)
+        if model.id == 'gpt' then
+          assert.is_nil(model.variants)
+        end
       end
     end)
 

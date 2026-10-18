@@ -26,12 +26,35 @@ describe('pi catalog', function()
     assert.equals(200000, sonnet.limit.context)
   end)
 
-  it('does not guess levels for models that are not current', function()
-    local result = catalog.catalog(models, models[2], { 'off' })
-    local sonnet = result.providers[1].models.sonnet
-    assert.is_true(sonnet.reasoning)
-    assert.is_nil(sonnet.variants)
-    assert.same({}, catalog.catalog(models).default)
+  it("derives levels of other models from pi's own thinkingLevelMap", function()
+    local nil_ = vim.NIL
+    local real = {
+      id = 'anthropic/claude-sonnet-5.5',
+      provider = 'openrouter',
+      reasoning = true,
+      thinkingLevelMap = {
+        off = nil_,
+        minimal = nil_,
+        low = 'low',
+        medium = 'medium',
+        high = 'high',
+        xhigh = 'xhigh',
+        max = 'max',
+      },
+    }
+    assert.same({ 'low', 'medium', 'high', 'xhigh', 'max' }, catalog.supported_levels(real))
+    assert.same({ 'off', 'minimal', 'low', 'medium', 'high' }, catalog.supported_levels(models[1]))
+    assert.same({ 'off' }, catalog.supported_levels(models[2]))
+    local result = catalog.catalog({ real, models[2] }, models[2], { 'off' })
+    assert.same(
+      { 'high', 'low', 'max', 'medium', 'xhigh' },
+      vim.fn.sort(vim.tbl_keys(result.providers[2].models[real.id].variants))
+    )
+  end)
+
+  it('prefers what pi reports for the current model over its map', function()
+    local result = catalog.catalog(models, models[1], { 'off', 'high' })
+    assert.same({ 'high', 'off' }, vim.fn.sort(vim.tbl_keys(result.providers[1].models.sonnet.variants)))
   end)
 
   it('offers no variants when the current model only supports off', function()

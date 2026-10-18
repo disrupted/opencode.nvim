@@ -1,11 +1,31 @@
 local M = {}
 
----Pi only reports levels for its current model, so other models expose `reasoning` without a variant list.
+local SCALE = { 'off', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max' }
+
+---Mirrors pi's own rule: a `null` map entry removes a level, and `xhigh`/`max` exist only when the map names them.
 ---@param model OpencodePiModel
----@param levels? string[] Supported levels when `model` is the current one
+---@return string[]
+function M.supported_levels(model)
+  if not model.reasoning then
+    return { 'off' }
+  end
+  local map = model.thinkingLevelMap or {}
+  local levels = {}
+  for _, level in ipairs(SCALE) do
+    local mapped = map[level]
+    local unsupported = mapped == vim.NIL or (mapped == nil and (level == 'xhigh' or level == 'max'))
+    if not unsupported then
+      levels[#levels + 1] = level
+    end
+  end
+  return levels
+end
+
+---@param model OpencodePiModel
+---@param levels string[]
 ---@return table<string, table>|nil
 local function variants_for(model, levels)
-  if not (model.reasoning and levels and #levels > 1) then
+  if not (model.reasoning and #levels > 1) then
     return nil
   end
   local variants = {}
@@ -17,17 +37,18 @@ end
 
 ---@param model OpencodePiModel
 ---@param current? OpencodePiModel
----@param levels? string[]
+---@param current_levels? string[] What pi reports for `current`; it wins over the model's own map
 ---@return table
-local function catalog_model(model, current, levels)
+local function catalog_model(model, current, current_levels)
   local is_current = current ~= nil and current.provider == model.provider and current.id == model.id
+  local levels = is_current and current_levels or M.supported_levels(model)
   return {
     id = model.id,
     name = model.name or model.id,
     providerID = model.provider,
     reasoning = model.reasoning == true,
     limit = { context = model.contextWindow or 0, output = model.maxTokens or 0 },
-    variants = is_current and variants_for(model, levels) or nil,
+    variants = variants_for(model, levels),
   }
 end
 

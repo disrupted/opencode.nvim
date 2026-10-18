@@ -33,6 +33,7 @@
 ---@field reasoning? boolean
 ---@field contextWindow? integer
 ---@field maxTokens? integer
+---@field thinkingLevelMap? table<string, string|vim.NIL> `null` marks a level the model does not support
 
 ---@class OpencodePiCommand
 ---@field name string

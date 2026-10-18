@@ -103,6 +103,9 @@ end
 
 local noticed_methods = {}
 
+---Footer and widget decorations carry nothing the user must act on, so they do not deserve a notice per extension.
+local decoration_methods = { 'setStatus', 'setWidget', 'setTitle' }
+
 ---Handles what needs no observation, so it works while no UI is open and no event stream runs.
 ---@param connection OpencodePiConnection
 ---@param event table `extension_ui_request`
@@ -120,6 +123,8 @@ function M.dispatch(connection, event)
       log.warn('declining Pi extension dialog %s: no session is observed', tostring(event.id))
       process.get():extension_ui_response({ id = event.id, cancelled = true })
     end
+  elseif vim.tbl_contains(decoration_methods, method) then
+    log.debug('ignoring Pi extension UI decoration %s', method)
   elseif not noticed_methods[method] then
     noticed_methods[method] = true
     log.notify(

@@ -87,7 +87,7 @@ describe('pi backend with the shared model and variant pickers', function()
 
   it('refreshes the variants when the model changes', function()
     state.model.set_model('anthropic/opus')
-    assert.is_nil(variant_names())
+    assert.same({ 'high', 'low', 'medium', 'minimal', 'off' }, variant_names())
     switch_pi_to('anthropic', 'opus')
     assert.same({ 'high', 'low', 'medium', 'minimal', 'off', 'xhigh' }, variant_names())
     switch_pi_to('anthropic', 'sonnet')

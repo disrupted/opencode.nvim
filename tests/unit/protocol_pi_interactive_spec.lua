@@ -212,13 +212,15 @@ describe('pi interactive surface over a fake pi process', function()
       assert.stub(notify).was_called_with('Blocked', vim.log.levels.WARN)
     end)
 
-    it('tells the user once about methods it cannot show', function()
+    it('tells the user once about methods it cannot show, but not about footer decorations', function()
       open({
         state = { sessionId = 's' },
         after = run({
-          ui({ id = 'w1', method = 'setWidget', widgetKey = 'k' }),
-          ui({ id = 'w2', method = 'setWidget', widgetKey = 'k' }),
           ui({ id = 's1', method = 'setStatus', statusKey = 'k' }),
+          ui({ id = 'w1', method = 'setWidget', widgetKey = 'k' }),
+          ui({ id = 'e1', method = 'set_editor_text', text = 'a' }),
+          ui({ id = 'e2', method = 'set_editor_text', text = 'b' }),
+          ui({ id = 'x1', method = 'somethingNew' }),
         }),
       })
       observation:submit({ text = 'go' }):wait()
@@ -227,8 +229,8 @@ describe('pi interactive surface over a fake pi process', function()
       end)
       vim.wait(100)
       assert.equals(2, #notify.calls)
-      assert.matches('setWidget', notify.calls[1].refs[1])
-      assert.matches('setStatus', notify.calls[2].refs[1])
+      assert.matches('set_editor_text', notify.calls[1].refs[1])
+      assert.matches('somethingNew', notify.calls[2].refs[1])
     end)
 
     it('drops a dialog locally when its timeout passes, without answering', function()
