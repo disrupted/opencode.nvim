@@ -1,7 +1,7 @@
 local Promise = require('opencode.promise')
 
 describe('open session smoke test (pi backend)', function()
-  local original_session_dir
+  local saved_env
   local original_get
   local session_dir
   local rpc_client
@@ -78,9 +78,22 @@ describe('open session smoke test (pi backend)', function()
   end
 
   before_each(function()
-    original_session_dir = vim.env.PI_CODING_AGENT_SESSION_DIR
-    session_dir = vim.fn.tempname()
+    -- The agent environment points PI_* and XDG_* at real data; nothing of it may leak in.
+    saved_env = {}
+    for name in pairs(vim.fn.environ()) do
+      if name:match('^PI_') then
+        saved_env[name] = vim.env[name]
+        vim.env[name] = nil
+      end
+    end
+    local root = vim.fn.tempname()
+    for name, dir in pairs({ XDG_STATE_HOME = 'state', XDG_DATA_HOME = 'data', XDG_CONFIG_HOME = 'config' }) do
+      saved_env[name] = saved_env[name] or vim.env[name] or false
+      vim.env[name] = vim.fs.joinpath(root, dir)
+    end
+    session_dir = vim.fs.joinpath(root, 'sessions')
     vim.fn.mkdir(session_dir, 'p')
+    vim.env.PI_CODING_AGENT_DIR = vim.fs.joinpath(root, 'agent')
     vim.env.PI_CODING_AGENT_SESSION_DIR = session_dir
     write_fixture(vim.fs.joinpath(session_dir, 'smoke.jsonl'))
   end)
@@ -90,11 +103,15 @@ describe('open session smoke test (pi backend)', function()
       rpc_client.get = original_get
       rpc_client = nil
     end
-    vim.env.PI_CODING_AGENT_SESSION_DIR = original_session_dir
+    vim.env.PI_CODING_AGENT_DIR = nil
+    vim.env.PI_CODING_AGENT_SESSION_DIR = nil
+    for name, value in pairs(saved_env) do
+      vim.env[name] = value or nil
+    end
     if state.windows then
       require('opencode.ui.ui').close_windows(state.windows, false)
     end
-    vim.fn.delete(session_dir, 'rf')
+    vim.fn.delete(vim.fs.dirname(session_dir), 'rf')
   end)
 
   it('opens the UI, loads the latest session and renders its messages', function()
