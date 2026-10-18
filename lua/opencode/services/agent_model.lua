@@ -4,7 +4,6 @@ local util = require('opencode.util')
 local Promise = require('opencode.promise')
 local log = require('opencode.log')
 local session_tabs = require('opencode.state.session_tabs')
-local config = require('opencode.config')
 local server_job = require('opencode.server_job')
 
 local M = {}
@@ -60,12 +59,20 @@ function M.set_variant(variant)
   end
 end
 
----Pi owns the thinking level and the model order, so it picks the next one; the selection is only mirrored here.
+---@param connection OpencodeServer
+---@return OpencodeOptionalOperations
+local function optional_operations(connection)
+  return connection.operations --[[@as OpencodeOptionalOperations]]
+end
+
+---A backend that owns the thinking level and the model order picks the next one; the selection is only mirrored here.
 M.cycle_variant = Promise.async(function()
-  if config.backend == 'pi' then
-    local connection = server_job.ensure_server():await()
+  -- An existing connection only: the variant list below starts the server itself, and this must not start one first.
+  local connection = state.opencode_server
+  local cycle_thinking_level = connection and optional_operations(connection).cycle_thinking_level
+  if connection and cycle_thinking_level then
     local ok, level = pcall(function()
-      return connection.operations.cycle_thinking_level(connection):await()
+      return cycle_thinking_level(connection):await()
     end)
     if not ok then
       log.notify(tostring(level), vim.log.levels.WARN)
@@ -127,15 +134,22 @@ M.cycle_variant = Promise.async(function()
   M.set_variant(next_variant)
 end)
 
+---@type fun(): Promise<boolean>
+M.is_single_agent = Promise.async(function()
+  local connection = server_job.ensure_server():await()
+  return connection.capabilities ~= nil and connection.capabilities.single_agent == true
+end)
+
 ---Cycle to the next model the backend offers.
 M.cycle_model = Promise.async(function()
-  if config.backend ~= 'pi' then
-    log.notify('Cycling models is only supported by the Pi backend', vim.log.levels.WARN)
+  local connection = server_job.ensure_server():await()
+  local cycle_model = optional_operations(connection).cycle_model
+  if not cycle_model then
+    log.notify('Cycling models is not supported by this backend', vim.log.levels.WARN)
     return
   end
-  local connection = server_job.ensure_server():await()
   local ok, selected = pcall(function()
-    return connection.operations.cycle_model(connection):await()
+    return cycle_model(connection):await()
   end)
   if not ok then
     log.notify(tostring(selected), vim.log.levels.WARN)

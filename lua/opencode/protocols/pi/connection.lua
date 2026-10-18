@@ -31,6 +31,7 @@ function M.start_server()
     connection.kind = 'stdio'
     connection.protocol = 'pi'
     connection.server_identity = { version = 'pi' }
+    connection.capabilities = { single_agent = true }
     connection.pi = { session_id = pi_state.sessionId }
     local unsubscribe = process.on_event(function(event)
       if event.type == 'extension_ui_request' then

@@ -4,6 +4,14 @@ local Promise = require('opencode.promise')
 local auth = require('opencode.auth')
 local protocol_connection = require('opencode.protocols.connection')
 
+---Operations only some protocols provide; callers must test for presence instead of checking the protocol name.
+---@class OpencodeOptionalOperations
+---@field cycle_model? fun(connection: OpencodeServer): Promise<OpencodeV2ModelReference>
+---@field cycle_thinking_level? fun(connection: OpencodeServer): Promise<string>
+
+---@class OpencodeConnectionCapabilities
+---@field single_agent? boolean There is no agent/mode to switch; the agent-mode key cycles models instead
+
 --- @class OpencodeServer
 ---@field kind 'http'|'stdio' Transport kind; `url` and `credential` exist only for http
 ---@field job vim.SystemObj|nil The vim.system job handle
@@ -15,6 +23,7 @@ local protocol_connection = require('opencode.protocols.connection')
 ---@field server_identity? {version: string, pid: integer|nil} Identity facts returned by the probe or acquisition
 ---@field credential? {username: string, password?: string} Credential owned by this connection
 ---@field operations? OpencodeV1Operations|OpencodeV2Operations|OpencodePiOperations Protocol operations selected when the connection becomes ready
+---@field capabilities? OpencodeConnectionCapabilities Optional behavior this connection declares; absent means the opencode defaults
 ---@field catalog_revision? integer Bumped when the model catalog (e.g. variants of the current model) may have changed
 ---@field observations table<string, OpencodeObservation?> Observations owned by this connection
 ---@field shutdown_promise Promise<boolean>

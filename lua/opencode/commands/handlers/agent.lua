@@ -6,7 +6,6 @@ local Promise = require('opencode.promise')
 local agent_model = require('opencode.services.agent_model')
 local ui = require('opencode.ui.ui')
 local log = require('opencode.log')
-local config = require('opencode.config')
 
 local M = {
   actions = {},
@@ -82,8 +81,8 @@ M.actions.select_agent = Promise.async(function()
 end)
 
 M.actions.switch_mode = Promise.async(function()
-  -- Pi has a single agent, so the agent-mode key cycles models instead.
-  if config.backend == 'pi' then
+  -- Without agents to switch, the agent-mode key cycles models instead.
+  if agent_model.is_single_agent():await() then
     return agent_model.cycle_model():await()
   end
   local modes = config_file.get_opencode_agents():await() --[[@as string[] ]]

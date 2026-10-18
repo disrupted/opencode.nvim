@@ -535,7 +535,6 @@ describe('pi interactive surface over a fake pi process', function()
   end)
 
   describe('cycling', function()
-    local config = require('opencode.config')
     local server_job = require('opencode.server_job')
     local agent_model = require('opencode.services.agent_model')
     local agent = require('opencode.commands.handlers.agent')
@@ -544,18 +543,16 @@ describe('pi interactive surface over a fake pi process', function()
 
     local sonnet = { id = 'sonnet', name = 'Sonnet', provider = 'anthropic', reasoning = true }
     local gpt = { id = 'gpt', name = 'GPT', provider = 'openai', reasoning = false }
-    local ensure, saved_backend
+    local ensure
 
     before_each(function()
-      saved_backend = config.backend
-      config.backend = 'pi'
       state.model.set_model(nil)
       state.model.set_variant(nil)
     end)
 
     after_each(function()
-      config.backend = saved_backend
       ensure:revert()
+      state.jobs.clear_server()
       state.model.set_model(nil)
       state.model.set_variant(nil)
     end)
@@ -563,6 +560,7 @@ describe('pi interactive surface over a fake pi process', function()
     local function open_cycling(script)
       open(script)
       ensure = stub(server_job, 'ensure_server').returns(Promise.new():resolve(connection))
+      state.jobs.set_server(connection)
     end
 
     it('cycles the thinking level through the existing cycle_variant action', function()
@@ -599,6 +597,46 @@ describe('pi interactive surface over a fake pi process', function()
       agent_model.cycle_model():wait()
       assert.is_nil(state.current_model)
       assert.stub(notify).was_called_with('No other model to cycle to', vim.log.levels.WARN)
+    end)
+
+    describe('against a connection without the optional capabilities', function()
+      local config_file = require('opencode.config_file')
+
+      before_each(function()
+        open({ state = { sessionId = 's' } })
+        local bare = { operations = {} }
+        ensure = stub(server_job, 'ensure_server').returns(Promise.new():resolve(bare))
+        state.jobs.set_server(bare)
+      end)
+
+      it('does not cycle models and says so', function()
+        agent_model.cycle_model():wait()
+        assert.is_nil(state.current_model)
+        assert.stub(notify).was_called_with('Cycling models is not supported by this backend', vim.log.levels.WARN)
+      end)
+
+      it('falls back to the variant list of the model when it cannot cycle thinking levels', function()
+        agent_model.cycle_variant():wait()
+        assert.stub(notify).was_called_with('No model selected', vim.log.levels.WARN)
+      end)
+
+      it('switches agent modes instead of cycling models', function()
+        local agents = stub(config_file, 'get_opencode_agents').returns(Promise.new():resolve({ 'plan', 'build' }))
+        local switch = stub(agent_model, 'switch_to_mode').returns(Promise.new():resolve(true))
+        state.store.set('current_mode', 'plan')
+        agent.actions.switch_mode():wait()
+        assert.stub(switch).was_called_with('build')
+        agents:revert()
+        switch:revert()
+      end)
+    end)
+
+    it('reports the single-agent capability only when the connection declares it', function()
+      open_cycling({ state = { sessionId = 's' } })
+      assert.is_true(agent_model.is_single_agent():wait())
+      ensure:revert()
+      ensure = stub(server_job, 'ensure_server').returns(Promise.new():resolve({ operations = {} }))
+      assert.is_false(agent_model.is_single_agent():wait())
     end)
 
     it('registers cycle_model as a bindable command and api export', function()
