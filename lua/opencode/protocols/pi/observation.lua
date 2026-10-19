@@ -58,6 +58,20 @@ local function put_entry(observation, entry)
   end
 end
 
+---Pi reports usage per assistant message only, so the session total is derived from the transcript.
+---@param observation OpencodePiObservation
+local function sync_session_cost(observation)
+  local state = observation:read()
+  if not state.session then
+    return
+  end
+  local total = 0
+  for _, entry in pairs(state.entries_by_id) do
+    total = total + (entry.cost or 0)
+  end
+  state.session.cost = total
+end
+
 ---@param observation OpencodePiObservation
 ---@param queued {id: string, text: string}
 ---@return table
@@ -106,6 +120,7 @@ local function apply_resource(observation, resource, value)
   elseif resource == 'execution' then
     state.execution.activity = value[observation._session_id] and 'running' or 'idle'
   end
+  sync_session_cost(observation)
 end
 
 ---Extension dialogs are produced by events, never fetched.
@@ -284,6 +299,7 @@ local function message_event(observation, message, phase)
     end
   end
   put_entry(observation, entry)
+  sync_session_cost(observation)
   trail_queued(observation)
   observation:_event_changed('messages')
 end

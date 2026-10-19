@@ -61,6 +61,13 @@ local function apply_outcome(part, outcome)
 end
 
 ---Result is merged into the call that produced it, whether it arrives with history or live.
+---Tool timestamps must share the epoch of pi's message timestamps, which vim.uv.now() does not.
+---@return integer
+local function wall_ms()
+  local sec, usec = vim.uv.gettimeofday()
+  return sec * 1000 + math.floor(usec / 1000)
+end
+
 ---@param part table
 ---@param message {content?: any, isError?: boolean, timestamp?: number}
 function M.apply_tool_result(part, message)
@@ -78,10 +85,10 @@ function M.apply_tool_execution(part, event)
   part.time = part.time or {}
   if finished then
     apply_outcome(part, tool_outcome(text_of(result.content), failed))
-    part.time.completed = vim.uv.now()
+    part.time.completed = wall_ms()
   else
     part.state = 'running'
-    part.time.started = part.time.started or vim.uv.now()
+    part.time.started = part.time.started or wall_ms()
     if event.partialResult then
       part.result = { { kind = 'text', text = text_of(result.content) } }
     end
