@@ -82,6 +82,21 @@ describe('pi sessions', function()
     end)
   end)
 
+  describe('model', function()
+    it('reports the model of the last assistant message', function()
+      local function assistant(model)
+        return { role = 'assistant', timestamp = 1, provider = 'p', model = model, content = {} }
+      end
+      ctx:write_session('m.jsonl', { id = 'm', cwd = '/w' }, { user('hi'), assistant('a'), assistant('b'), user('x') })
+      assert.same({ providerID = 'p', id = 'b' }, sessions.find('m').model)
+    end)
+
+    it('has no model before one was used', function()
+      ctx:write_session('n.jsonl', { id = 'n', cwd = '/w' }, { user('hi') })
+      assert.is_nil(sessions.find('n').model)
+    end)
+  end)
+
   describe('duplicates', function()
     it('collapses a forked file repeating its parent id to the most recently updated one', function()
       local parent = ctx:write_session('parent.jsonl', { id = 'shared', cwd = '/w' }, { user('parent') })

@@ -4,6 +4,7 @@
 ---@field location OpencodeLocation
 ---@field time {created: number, updated: number}
 ---@field path string Session file on disk
+---@field model? OpencodeV2ModelReference Last model recorded in the session file
 
 ---@class OpencodePiMessage Native message as stored in session JSONL and returned by `get_messages`
 ---@field role 'user'|'assistant'|'toolResult'|string

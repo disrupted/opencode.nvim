@@ -32,7 +32,7 @@ end
 ---@param fact OpencodePiSessionFact
 ---@return table
 local function public_session(fact)
-  return { id = fact.id, title = fact.title, location = fact.location, time = fact.time }
+  return { id = fact.id, title = fact.title, location = fact.location, time = fact.time, model = fact.model }
 end
 
 ---@param location? OpencodeLocation

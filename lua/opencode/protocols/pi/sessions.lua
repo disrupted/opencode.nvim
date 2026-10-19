@@ -52,15 +52,22 @@ local function read_session(path)
     return nil
   end
 
-  local header, name, first_user
+  local header, name, first_user, model, variant
   for _, entry in ipairs(read_entries(path)) do
     if not header and entry.type == 'session' then
       header = entry
     elseif entry.type == 'session_info' then
       name = truncate(entry.name or '', 70)
-    elseif entry.type == 'message' and not first_user and type(entry.message) == 'table' then
-      if entry.message.role == 'user' then
-        first_user = truncate(content_text(entry.message.content), 70)
+    elseif entry.type == 'model_change' and entry.provider and entry.modelId then
+      model = { providerID = entry.provider, id = entry.modelId }
+    elseif entry.type == 'thinking_level_change' then
+      variant = entry.thinkingLevel
+    elseif entry.type == 'message' and type(entry.message) == 'table' then
+      local message = entry.message
+      if message.role == 'user' and not first_user then
+        first_user = truncate(content_text(message.content), 70)
+      elseif message.role == 'assistant' and message.provider and message.model then
+        model = { providerID = message.provider, id = message.model }
       end
     end
   end
@@ -76,6 +83,7 @@ local function read_session(path)
     location = { directory = header.cwd },
     time = { created = created, updated = updated },
     path = path,
+    model = model and { providerID = model.providerID, id = model.id, variant = variant },
   }
 end
 
