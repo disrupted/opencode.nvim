@@ -145,9 +145,20 @@ describe('pi protocol over a fake pi process', function()
         ev({ type = 'message_start', message = text_message('user', 100, 'go') }),
         ev({ type = 'message_end', message = text_message('user', 100, 'go') }),
         ev({ type = 'message_start', message = assistant({}) }),
-        ev({ type = 'message_update', message = assistant({ thinking }) }),
-        ev({ type = 'message_update', message = assistant({ thinking, text }) }),
-        ev({ type = 'message_update', message = assistant({ thinking, text, call }) }),
+        ev({ type = 'message_update', assistantMessageEvent = { type = 'thinking_start', contentIndex = 0 } }),
+        ev({
+          type = 'message_update',
+          assistantMessageEvent = { type = 'thinking_end', contentIndex = 0, content = 'plan' },
+        }),
+        ev({ type = 'message_update', assistantMessageEvent = { type = 'text_start', contentIndex = 1 } }),
+        ev({
+          type = 'message_update',
+          assistantMessageEvent = { type = 'text_end', contentIndex = 1, content = 'Running' },
+        }),
+        ev({
+          type = 'message_update',
+          assistantMessageEvent = { type = 'toolcall_end', contentIndex = 2, toolCall = call },
+        }),
         ev({ type = 'message_end', message = assistant({ thinking, text, call }, { stopReason = 'toolUse' }) }),
         ev({ type = 'tool_execution_start', toolCallId = 'c1', toolName = 'bash', args = call.arguments }),
         ev({
@@ -221,9 +232,19 @@ describe('pi protocol over a fake pi process', function()
           prompt = {
             ev({ type = 'agent_start' }),
             ev({ type = 'message_start', message = { role = 'assistant', content = {} } }),
-            ev({ type = 'message_update', message = { role = 'assistant', content = text('a') } }),
-            ev({ type = 'message_update', message = { role = 'assistant', content = text('ab') } }),
-            ev({ type = 'message_update', message = { role = 'assistant', content = text('abc') } }),
+            ev({ type = 'message_update', assistantMessageEvent = { type = 'text_start', contentIndex = 0 } }),
+            ev({
+              type = 'message_update',
+              assistantMessageEvent = { type = 'text_delta', contentIndex = 0, delta = 'a' },
+            }),
+            ev({
+              type = 'message_update',
+              assistantMessageEvent = { type = 'text_delta', contentIndex = 0, delta = 'b' },
+            }),
+            ev({
+              type = 'message_update',
+              assistantMessageEvent = { type = 'text_delta', contentIndex = 0, delta = 'c' },
+            }),
           },
         },
       }

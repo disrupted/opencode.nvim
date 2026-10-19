@@ -2,6 +2,7 @@ local lifecycle = require('opencode.protocols.observation')
 local entries = require('opencode.protocols.entries')
 local submission = require('opencode.protocols.submission')
 local normalize = require('opencode.protocols.pi.normalize')
+local stream = require('opencode.protocols.pi.stream')
 local process = require('opencode.protocols.pi.process')
 local id = require('opencode.id')
 local ui_requests = require('opencode.protocols.pi.ui_requests')
@@ -33,6 +34,7 @@ end
 ---@field _pi_ended boolean The current run was already finished by an earlier event
 ---@field _pi_ui table<string, OpencodePiUiRequest> Open extension dialogs by request id
 ---@field _pi_admissions table<string, fun(value?: table, err?: string)>
+---@field _pi_partial? OpencodePiMessage Assistant message rebuilt from message_update deltas
 ---@field _pi_live table<string, string> Entry id of the message currently streaming, per role; pi snapshots carry no id
 ---@field _pi_notices table[] Run notices (retry, compaction, extension errors) that are not part of pi's transcript
 ---@field _pi_stop? {reason?: string, message?: string} How the latest assistant message ended
@@ -514,12 +516,19 @@ local handlers = {
     settle(observation)
   end,
   message_start = function(observation, event)
+    observation._pi_partial = event.message.role == 'assistant' and vim.deepcopy(event.message) or nil
     message_event(observation, event.message, 'start')
   end,
   message_update = function(observation, event)
-    message_event(observation, event.message, 'update')
+    local partial = observation._pi_partial
+    if partial and stream.apply(partial, event.assistantMessageEvent) then
+      message_event(observation, partial, 'update')
+    end
   end,
   message_end = function(observation, event)
+    if event.message.role == 'assistant' then
+      observation._pi_partial = nil
+    end
     message_event(observation, event.message, 'end')
   end,
   tool_execution_start = tool_event,
