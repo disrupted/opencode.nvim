@@ -54,6 +54,10 @@ function M.actions.cycle_variant()
   agent_model.cycle_variant()
 end
 
+function M.actions.cycle_model()
+  agent_model.cycle_model()
+end
+
 function M.actions.agent_plan()
   agent_model.switch_to_mode('plan')
 end
@@ -77,6 +81,10 @@ M.actions.select_agent = Promise.async(function()
 end)
 
 M.actions.switch_mode = Promise.async(function()
+  -- Without agents to switch, the agent-mode key cycles models instead.
+  if agent_model.is_single_agent():await() then
+    return agent_model.cycle_model():await()
+  end
   local modes = config_file.get_opencode_agents():await() --[[@as string[] ]]
   local current_index = util.index_of(modes, state.store.get('current_mode'))
 
@@ -128,6 +136,10 @@ M.command_defs = {
   cycle_variant = {
     desc = 'Cycle model variant',
     execute = M.actions.cycle_variant,
+  },
+  cycle_model = {
+    desc = 'Cycle model',
+    execute = M.actions.cycle_model,
   },
   switch_mode = {
     desc = 'Cycle agent mode',

@@ -4,16 +4,29 @@ local Promise = require('opencode.promise')
 local auth = require('opencode.auth')
 local protocol_connection = require('opencode.protocols.connection')
 
+---Operations only some protocols provide; callers must test for presence instead of checking the protocol name.
+---@class OpencodeOptionalOperations
+---@field cycle_model? fun(connection: OpencodeServer): Promise<OpencodeV2ModelReference>
+---@field cycle_thinking_level? fun(connection: OpencodeServer): Promise<string>
+---@field select_model? fun(connection: OpencodeServer, model: {providerID: string, id: string}): Promise<OpencodeV2ModelReference>
+---@field set_thinking_level? fun(connection: OpencodeServer, level: string): Promise<string>
+
+---@class OpencodeConnectionCapabilities
+---@field single_agent? boolean There is no agent/mode to switch; the agent-mode key cycles models instead
+
 --- @class OpencodeServer
+---@field kind 'http'|'stdio' Transport kind; `url` and `credential` exist only for http
 ---@field job vim.SystemObj|nil The vim.system job handle
 ---@field url string|nil The server URL once ready
 ---@field port number|nil The port this server is using (for custom servers)
 ---@field handle integer|nil Compatibility property for job.stop interface
----@field protocol? 'v1'|'v2' Protocol selected by authenticated health probe
+---@field protocol? string Protocol selected by authenticated health probe
 ---@field version? string Server version returned by the selected health endpoint
 ---@field server_identity? {version: string, pid: integer|nil} Identity facts returned by the probe or acquisition
 ---@field credential? {username: string, password?: string} Credential owned by this connection
----@field operations? OpencodeV1Operations|OpencodeV2Operations Protocol operations selected when the connection becomes ready
+---@field operations? OpencodeV1Operations|OpencodeV2Operations|OpencodePiOperations Protocol operations selected when the connection becomes ready
+---@field capabilities? OpencodeConnectionCapabilities Optional behavior this connection declares; absent means the opencode defaults
+---@field catalog_revision? integer Bumped when the model catalog (e.g. variants of the current model) may have changed
 ---@field observations table<string, OpencodeObservation?> Observations owned by this connection
 ---@field shutdown_promise Promise<boolean>
 ---@field private _ready boolean
@@ -50,6 +63,7 @@ function OpencodeServer.new()
   ensure_vim_leave_autocmd()
 
   return setmetatable({
+    kind = 'http',
     job = nil,
     url = nil,
     port = nil,
@@ -148,7 +162,8 @@ function OpencodeServer:mark_ready()
   if self.shutdown_promise:is_resolved() then
     error('cannot ready a closed Connection')
   end
-  if type(self.url) ~= 'string' or self.url == '' then
+  local http = self.kind == 'http'
+  if http and (type(self.url) ~= 'string' or self.url == '') then
     error('ready connection requires url')
   end
   local runtime = self.protocol and protocol_connection.runtime(self.protocol)
@@ -166,11 +181,13 @@ function OpencodeServer:mark_ready()
     error('ready connection server_identity pid must be a number')
   end
   self.version = self.server_identity.version
-  if type(self.credential) ~= 'table' or type(self.credential.username) ~= 'string' then
-    error('ready connection requires credential')
-  end
-  if self.credential.password ~= nil and type(self.credential.password) ~= 'string' then
-    error('ready connection credential password must be a string')
+  if http then
+    if type(self.credential) ~= 'table' or type(self.credential.username) ~= 'string' then
+      error('ready connection requires credential')
+    end
+    if self.credential.password ~= nil and type(self.credential.password) ~= 'string' then
+      error('ready connection credential password must be a string')
+    end
   end
   self.operations = runtime.operations
   local observation_protocol = runtime.observation
@@ -203,7 +220,7 @@ end
 
 --- Probe protocol using authenticated health endpoints.
 ---@param timeout_ms number|nil
----@return Promise<{protocol: 'v1'|'v2', response: table}>
+---@return Promise<{protocol: string, response: table}>
 function OpencodeServer:probe_connection(timeout_ms)
   return protocol_connection.probe(self, timeout_ms)
 end
@@ -211,7 +228,7 @@ end
 ---Check if the server is reachable via its health endpoint.
 ---@return Promise<boolean>
 function OpencodeServer:check_health()
-  if not self._ready or not self.url then
+  if not self._ready then
     return Promise.new():resolve(false)
   end
   return protocol_connection.check_health(self)

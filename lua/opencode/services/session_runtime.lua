@@ -1005,6 +1005,9 @@ M.cancel = Promise.async(function(session_id, tab_id, opts)
 end)
 
 M.opencode_ok = Promise.async(function()
+  if config.backend ~= 'opencode' then
+    return true
+  end
   if vim.fn.executable(config.opencode_executable) == 0 then
     vim.notify(
       'opencode command not found - please install and configure opencode before using this plugin',

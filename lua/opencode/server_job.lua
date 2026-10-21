@@ -7,6 +7,7 @@ local config = require('opencode.config')
 local util = require('opencode.util')
 local auth = require('opencode.auth')
 local legacy_server = require('opencode.protocols.v1.server')
+local registry = require('opencode.protocols.registry')
 
 local M = {}
 local health_checked_at = setmetatable({}, { __mode = 'k' })
@@ -248,7 +249,32 @@ local try_native_service = Promise.async(function()
   return server
 end)
 
+---Non-opencode backends own launch, health and shutdown; HTTP discovery below is skipped.
+---@return OpencodeStartableAdapter|nil
+local function backend_adapter()
+  local backend = config.backend
+  if backend == 'opencode' then
+    return nil
+  end
+  require('opencode.protocols.' .. backend .. '.connection')
+  local adapter = registry.get(backend)
+  if not adapter or not adapter.start_server then
+    error(string.format('backend %q cannot start a server', backend), 0)
+  end
+  ---@cast adapter OpencodeStartableAdapter
+  return adapter
+end
+
+---@return Promise<OpencodeServer>
 local function _start_server()
+  local adapter = backend_adapter()
+  if adapter then
+    return adapter.start_server():and_then(function(server)
+      state.jobs.set_server(server)
+      return server
+    end)
+  end
+
   local promise = Promise.new()
 
   local custom_url = config.server.url

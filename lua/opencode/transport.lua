@@ -15,6 +15,9 @@ local function require_connection(connection)
   if type(connection) ~= 'table' or type(connection.is_ready) ~= 'function' or not connection:is_ready() then
     error('transport requires a ready Connection')
   end
+  if connection.kind == 'stdio' then
+    error('transport cannot carry HTTP requests for a stdio Connection')
+  end
 end
 
 local function require_request(request)

@@ -4,6 +4,7 @@ local util = require('opencode.util')
 local Promise = require('opencode.promise')
 local log = require('opencode.log')
 local session_tabs = require('opencode.state.session_tabs')
+local server_job = require('opencode.server_job')
 
 local M = {}
 
@@ -32,6 +33,37 @@ local function active_session_fact()
   return observation and observation:read().session or nil
 end
 
+---@param connection OpencodeServer
+---@return OpencodeOptionalOperations
+local function optional_operations(connection)
+  return connection.operations --[[@as OpencodeOptionalOperations]]
+end
+
+---A backend that runs one model itself must learn about the selection now, not at the next prompt.
+---Its answer is what is really in effect (e.g. a clamped level), so that is what gets mirrored locally.
+---Only an existing connection is used: without one there is nothing running to tell.
+---@param call fun(operations: OpencodeOptionalOperations, connection: OpencodeServer): Promise<OpencodeV2ModelReference|string>|nil
+local function push_selection(call)
+  local connection = state.opencode_server
+  local pending = connection and call(optional_operations(connection), connection)
+  if not pending then
+    return
+  end
+  Promise.async(function()
+    local ok, result = pcall(function()
+      return pending:await()
+    end)
+    if not ok then
+      log.notify(tostring(result), vim.log.levels.WARN)
+      return
+    end
+    local level = type(result) == 'table' and result.variant or result
+    if level ~= nil and state.current_variant ~= level then
+      state.model.set_variant(level)
+    end
+  end)()
+end
+
 ---Apply a selected model and remember it as the active mode's override.
 ---@param provider string
 ---@param model string
@@ -42,6 +74,9 @@ function M.set_model(provider, model)
   if state.current_mode then
     state.model.set_mode_model_override(state.current_mode, model_id)
   end
+  push_selection(function(operations, connection)
+    return operations.select_model and operations.select_model(connection, { providerID = provider, id = model })
+  end)
   return model_id
 end
 
@@ -56,9 +91,29 @@ function M.set_variant(variant)
   if provider and model then
     require('opencode.model_state').set_variant(provider, model, variant)
   end
+  if variant then
+    push_selection(function(operations, connection)
+      return operations.set_thinking_level and operations.set_thinking_level(connection, variant)
+    end)
+  end
 end
 
+---A backend that owns the thinking level and the model order picks the next one; the selection is only mirrored here.
 M.cycle_variant = Promise.async(function()
+  -- An existing connection only: the variant list below starts the server itself, and this must not start one first.
+  local connection = state.opencode_server
+  local cycle_thinking_level = connection and optional_operations(connection).cycle_thinking_level
+  if connection and cycle_thinking_level then
+    local ok, level = pcall(function()
+      return cycle_thinking_level(connection):await()
+    end)
+    if not ok then
+      log.notify(tostring(level), vim.log.levels.WARN)
+      return
+    end
+    state.model.set_variant(level)
+    return
+  end
   if not state.current_model then
     log.notify('No model selected', vim.log.levels.WARN)
     return
@@ -110,6 +165,31 @@ M.cycle_variant = Promise.async(function()
   end
 
   M.set_variant(next_variant)
+end)
+
+---@type fun(): Promise<boolean>
+M.is_single_agent = Promise.async(function()
+  local connection = server_job.ensure_server():await()
+  return connection.capabilities ~= nil and connection.capabilities.single_agent == true
+end)
+
+---Cycle to the next model the backend offers.
+M.cycle_model = Promise.async(function()
+  local connection = server_job.ensure_server():await()
+  local cycle_model = optional_operations(connection).cycle_model
+  if not cycle_model then
+    log.notify('Cycling models is not supported by this backend', vim.log.levels.WARN)
+    return
+  end
+  local ok, selected = pcall(function()
+    return cycle_model(connection):await()
+  end)
+  if not ok then
+    log.notify(tostring(selected), vim.log.levels.WARN)
+    return
+  end
+  state.model.set_model(string.format('%s/%s', selected.providerID, selected.id))
+  state.model.set_variant(selected.variant)
 end)
 
 --- Apply mode and resolve its associated model from config.
