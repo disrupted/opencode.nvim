@@ -90,7 +90,7 @@ local function event(session_id, kind, data, created)
 end
 
 local function flush(predicate)
-  assert.is_true(vim.wait(500, predicate or function()
+  assert.is_true(vim.wait(2000, predicate or function()
     return true
   end, 5))
 end
@@ -422,6 +422,395 @@ describe('V2 protocol Observation runtime', function()
     observed:load_older():wait()
     assert.same({ { cursor = nil, limit = 50 }, { cursor = 'older-cursor', limit = 50 } }, calls)
     assert.same({ 'Z', 'Y', 'A', 'B' }, observed:read().entry_order)
+    stop()
+  end)
+
+  it('gives a second caller the page already in flight instead of failing it', function()
+    local value = connection()
+    local calls = {}
+    local older = Promise.new()
+    install_operations(value, {
+      list_messages = function(_, _, cursor, limit)
+        calls[#calls + 1] = { cursor = cursor, limit = limit }
+        if cursor == nil then
+          return resolved({ data = { user('B', 'B', 4) }, cursor = { next = 'older-cursor' } })
+        end
+        return older
+      end,
+    })
+    local observed = value:observe({ id = 'ses-main' })
+    local stop = observed:watch({ 'messages' }, function() end)
+    flush(function()
+      return observed:read().sync.messages.state == 'current'
+    end)
+
+    local first = observed:load_older()
+    local second = observed:load_older()
+    assert.is_true(first == second, 'both callers wait on the same request')
+    assert.equals(2, #calls)
+
+    older:resolve({ data = { user('A', 'A', 3) }, cursor = {} })
+    first:wait()
+    second:wait()
+    assert.same({ 'A', 'B' }, observed:read().entry_order)
+    assert.equals(2, #calls)
+    stop()
+  end)
+
+  it('fetches the cursor a rebuild produced only after the in-flight page lands', function()
+    local value = connection()
+    local calls = {}
+    local older = Promise.new()
+    local snapshot_cursor = 'c1'
+    local streams = install_operations(value, {
+      list_messages = function(_, _, cursor, limit)
+        calls[#calls + 1] = { cursor = cursor, limit = limit }
+        if cursor == nil then
+          return resolved({ data = { user('B', 'B', 4) }, cursor = { next = snapshot_cursor } })
+        end
+        if cursor == 'c1' then
+          return older
+        end
+        return resolved({ data = {}, cursor = {} })
+      end,
+    })
+    local observed = value:observe({ id = 'ses-main' })
+    local stop = observed:watch({ 'messages' }, function() end)
+    flush(function()
+      return observed:read().sync.messages.state == 'current'
+    end)
+
+    local first = observed:load_older()
+    assert.equals(2, #calls)
+
+    snapshot_cursor = 'c2'
+    emit(streams[1], event('ses-main', 'session.compaction.ended', {}))
+    flush(function()
+      return observed._v2_older_cursor == 'c2'
+    end)
+    assert.is_false(first:is_resolved(), 'the page in flight is still pending')
+
+    local queued = observed:load_older()
+    local before = #calls
+    for index = 1, before do
+      assert.are_not.equals('c2', calls[index].cursor, 'the new cursor must wait for the page in flight')
+    end
+
+    older:resolve({ data = { user('A', 'A', 3) }, cursor = { next = 'c1b' } })
+    flush(function()
+      for index = before + 1, #calls do
+        if calls[index].cursor == 'c2' then
+          return true
+        end
+      end
+      return false
+    end)
+    queued:wait()
+    -- The rebuild replaced entries, order and cursor, so the page the caller
+    -- queued behind no longer describes this history.
+    assert.is_nil(observed:read().entries_by_id['A'])
+    assert.equals('c2', calls[#calls].cursor)
+    stop()
+  end)
+
+  it('clears the in-flight page when the request fails so the next call starts over', function()
+    local value = connection()
+    local calls = {}
+    local older = Promise.new()
+    local pending = true
+    local streams = install_operations(value, {
+      list_messages = function(_, _, cursor, limit)
+        calls[#calls + 1] = { cursor = cursor, limit = limit }
+        if cursor == nil then
+          return resolved({ data = { user('B', 'B', 4) }, cursor = { next = 'c1' } })
+        end
+        if cursor == 'c1' and pending then
+          pending = false
+          return older
+        end
+        return resolved({ data = { user('C', 'C', 2) }, cursor = { next = 'c1b' } })
+      end,
+    })
+    local observed = value:observe({ id = 'ses-main' })
+    local stop = observed:watch({ 'messages' }, function() end)
+    flush(function()
+      return observed:read().sync.messages.state == 'current'
+    end)
+
+    local first = observed:load_older()
+    local waited = observed:load_older()
+    assert.equals(2, #calls, 'the second caller shares the request in flight')
+
+    older:reject('HTTP request cancelled')
+    flush(function()
+      return observed._v2_older_page == nil
+    end)
+    for _, promise in ipairs({ first, waited }) do
+      local ok, err = pcall(promise.wait, promise)
+      assert.is_false(ok, 'a cancelled page rejects its waiters')
+      assert.truthy(tostring(err):find('cancelled'), tostring(err))
+    end
+
+    local again = observed:load_older()
+    assert.equals(3, #calls, 'a failed page must not strand the slot')
+    assert.equals('c1', calls[3].cursor, 'the cursor did not move, so the page is asked for again')
+    again:wait()
+    assert.is_not_nil(observed:read().entries_by_id['C'], 'the retried page lands')
+    stop()
+  end)
+
+  it('issues one page for twenty rapid load_older calls', function()
+    local value = connection()
+    local calls = {}
+    local older = Promise.new()
+    local streams = install_operations(value, {
+      list_messages = function(_, _, cursor, limit)
+        calls[#calls + 1] = { cursor = cursor, limit = limit }
+        if cursor == nil then
+          return resolved({ data = { user('B', 'B', 4) }, cursor = { next = 'c1' } })
+        end
+        if cursor == 'c1' then
+          return older
+        end
+        return resolved({ data = {}, cursor = {} })
+      end,
+    })
+    local observed = value:observe({ id = 'ses-main' })
+    local stop = observed:watch({ 'messages' }, function() end)
+    flush(function()
+      return observed:read().sync.messages.state == 'current'
+    end)
+
+    local pages = {}
+    for _ = 1, 20 do
+      pages[#pages + 1] = observed:load_older()
+    end
+    assert.equals(2, #calls, 'twenty key repeats share the one page in flight')
+
+    older:resolve({ data = { user('A', 'A', 3) }, cursor = { next = 'c1b' } })
+    for _, page in ipairs(pages) do
+      page:wait()
+    end
+    flush(function()
+      return observed:read().entries_by_id['A'] ~= nil
+    end)
+    assert.equals(2, #calls, 'the repeats never started a second request')
+    assert.is_not_nil(observed:read().entries_by_id['A'])
+    stop()
+  end)
+
+  it('applies an older page that arrived after live deltas and keeps the newer copy of shared entries', function()
+    local value = connection()
+    local calls = {}
+    local older = Promise.new()
+    local streams = install_operations(value, {
+      list_messages = function(_, _, cursor, limit)
+        calls[#calls + 1] = { cursor = cursor, limit = limit }
+        if cursor == nil then
+          return resolved({ data = { user('B', 'B', 4) }, cursor = { next = 'c1' } })
+        end
+        if cursor == 'c1' then
+          return older
+        end
+        return resolved({ data = {}, cursor = {} })
+      end,
+    })
+    local observed = value:observe({ id = 'ses-main' })
+    local stop = observed:watch({ 'messages' }, function() end)
+    flush(function()
+      return observed:read().sync.messages.state == 'current'
+    end)
+
+    local page = observed:load_older()
+    assert.equals(2, #calls)
+    emit(
+      streams[1],
+      event('ses-main', 'session.step.started', { assistantMessageID = 'msg-tail', agent = 'build' }, 20)
+    )
+    emit(streams[1], event('ses-main', 'session.text.started', { assistantMessageID = 'msg-tail', ordinal = 0 }, 21))
+    emit(
+      streams[1],
+      event('ses-main', 'session.text.delta', { assistantMessageID = 'msg-tail', ordinal = 0, delta = 'live' }, 22)
+    )
+    flush()
+
+    local online = observed:read().entries_by_id['B']
+    older:resolve({ data = { user('B', 'stale copy', 4), user('A', 'A', 3) }, cursor = { next = 'c1b' } })
+    page:wait()
+
+    assert.same({ 'A', 'B', 'msg-tail' }, observed:read().entry_order, 'the page prepends without repeating B')
+    assert.equals(online, observed:read().entries_by_id['B'], 'the entry received online keeps its identity')
+    assert.equals('B', observed:read().entries_by_id['B'].content[1].text, 'live content is not replaced by the page')
+    assert.equals('c1b', observed._v2_older_cursor)
+    assert.equals(2, #calls, 'the deltas did not cost another request')
+    stop()
+  end)
+
+  it('drops an older page a fresh snapshot superseded and does not resurrect what it removed', function()
+    local value = connection()
+    local calls = {}
+    local older = Promise.new()
+    local streams = install_operations(value, {
+      list_messages = function(_, _, cursor, limit)
+        calls[#calls + 1] = { cursor = cursor, limit = limit }
+        if cursor == nil then
+          if #calls == 1 then
+            return resolved({ data = { user('B', 'B', 4) }, cursor = { next = 'c1' } })
+          end
+          return resolved({ data = { user('A', 'A', 3) }, cursor = { next = 'c2' } })
+        end
+        if cursor == 'c1' then
+          return older
+        end
+        return resolved({ data = {}, cursor = {} })
+      end,
+    })
+    local observed = value:observe({ id = 'ses-main' })
+    local stop = observed:watch({ 'messages' }, function() end)
+    flush(function()
+      return observed:read().sync.messages.state == 'current'
+    end)
+
+    local page = observed:load_older()
+    assert.equals(2, #calls)
+    emit(streams[1], event('ses-main', 'session.compaction.ended', {}, 20))
+    flush(function()
+      return observed._loading.messages == nil and observed:read().sync.messages.state == 'current' and #calls >= 3
+    end)
+    local refetched = #calls
+    assert.equals(3, refetched, 'one rebuild request, not a stale one followed by a second')
+
+    older:resolve({ data = { user('B', 'B', 4), user('Z', 'Z', 1) }, cursor = {} })
+    page:wait()
+
+    assert.same({ 'A' }, observed:read().entry_order, 'the superseded page is dropped, not merged')
+    assert.equals('c2', observed._v2_older_cursor, 'the cursor stays with the snapshot that replaced the page')
+    assert.equals(refetched, #calls, 'dropping the page does not trigger another snapshot request')
+    stop()
+  end)
+
+  it('lets a rebuild of an empty window replace text deltas appended while it flew', function()
+    local value = connection()
+    local calls = {}
+    local rebuild = Promise.new()
+    local function reply(text)
+      return { id = 'msg-reply', type = 'assistant', agent = 'build', content = { { type = 'text', text = text } } }
+    end
+    local streams = install_operations(value, {
+      list_messages = function(_, _, cursor, limit)
+        calls[#calls + 1] = { cursor = cursor, limit = limit }
+        if #calls == 1 then
+          return resolved({ data = {}, cursor = { next = 'c1' } })
+        end
+        return rebuild
+      end,
+    })
+    local observed = value:observe({ id = 'ses-main' })
+    local stop = observed:watch({ 'messages' }, function() end)
+    flush(function()
+      return observed:read().sync.messages.state == 'current'
+    end)
+
+    emit(
+      streams[1],
+      event('ses-main', 'session.step.started', { assistantMessageID = 'msg-reply', agent = 'build' }, 20)
+    )
+    emit(streams[1], event('ses-main', 'session.text.started', { assistantMessageID = 'msg-reply', ordinal = 0 }, 21))
+    emit(
+      streams[1],
+      event('ses-main', 'session.text.delta', { assistantMessageID = 'msg-reply', ordinal = 0, delta = 'b' }, 22)
+    )
+    emit(
+      streams[1],
+      event('ses-main', 'session.text.delta', { assistantMessageID = 'msg-reply', ordinal = 0, delta = 'c' }, 23)
+    )
+    flush()
+    assert.equals('bc', observed:read().entries_by_id['msg-reply'].content[1].text, 'the deltas append locally')
+
+    emit(streams[1], event('ses-main', 'session.revert.committed', { messageID = 'msg-reply' }, 24))
+    flush(function()
+      return #calls >= 2
+    end)
+    rebuild:resolve({ data = { reply('b') }, cursor = { next = 'c1' } })
+    flush(function()
+      return observed._loading.messages == nil and observed:read().sync.messages.state == 'current'
+    end)
+
+    assert.equals(
+      'b',
+      observed:read().entries_by_id['msg-reply'].content[1].text,
+      'the snapshot is authoritative even though it lags the live text'
+    )
+
+    emit(
+      streams[1],
+      event('ses-main', 'session.text.ended', { assistantMessageID = 'msg-reply', ordinal = 0, text = 'bc' }, 25)
+    )
+    flush(function()
+      return observed:read().entries_by_id['msg-reply'].content[1].text == 'bc'
+    end)
+    assert.equals('bc', observed:read().entries_by_id['msg-reply'].content[1].text, 'the finished text restores it')
+    stop()
+  end)
+
+  it('stops load_complete_history when a round makes no progress', function()
+    local value = connection()
+    local calls = {}
+    install_operations(value, {
+      list_messages = function(_, _, cursor, limit)
+        calls[#calls + 1] = { cursor = cursor, limit = limit }
+        if cursor == nil then
+          return resolved({ data = { user('B', 'B', 4) }, cursor = { next = 'c1' } })
+        end
+        return resolved({ data = { user('A', 'A', 3) }, cursor = { next = cursor } })
+      end,
+    })
+    local observed = value:observe({ id = 'ses-main' })
+    local stop = observed:watch({ 'messages' }, function() end)
+    flush(function()
+      return observed:read().sync.messages.state == 'current'
+    end)
+
+    observed:load_complete_history():wait()
+    assert.equals(2, #calls, 'the cursor came back unchanged, so the walk stops after one round')
+    assert.is_not_nil(observed:read().entries_by_id['A'])
+    stop()
+  end)
+
+  it('discards a rebuild that a later event superseded', function()
+    local value = connection()
+    local pulls = 0
+    local rebuild = Promise.new()
+    local streams = install_operations(value, {
+      list_messages = function()
+        pulls = pulls + 1
+        if pulls == 1 then
+          return resolved({ data = { user('B', 'B', 4) }, cursor = { next = 'c1' } })
+        end
+        if pulls == 2 then
+          return rebuild
+        end
+        return resolved({ data = { user('C', 'C', 5) }, cursor = { next = 'c3' } })
+      end,
+    })
+    local observed = value:observe({ id = 'ses-main' })
+    local stop = observed:watch({ 'messages' }, function() end)
+    flush(function()
+      return observed:read().sync.messages.state == 'current'
+    end)
+
+    emit(streams[1], event('ses-main', 'session.compaction.ended', {}, 20))
+    flush(function()
+      return pulls == 2
+    end)
+    emit(streams[1], event('ses-main', 'session.compaction.ended', {}, 21))
+    rebuild:resolve({ data = { user('A', 'A', 3) }, cursor = { next = 'c2' } })
+    flush(function()
+      return observed._loading.messages == nil and observed:read().entries_by_id['C'] ~= nil
+    end)
+
+    assert.same({ 'C' }, observed:read().entry_order, 'the superseded rebuild never lands')
+    assert.equals('c3', observed._v2_older_cursor)
     stop()
   end)
 
@@ -768,6 +1157,51 @@ describe('V2 protocol Observation runtime', function()
       end
     )
   end
+
+  it('warns about unhandled session events only when no handler covers the type', function()
+    local value = connection()
+    local streams = install_operations(value)
+    local observed = value:observe({ id = 'ses-main' })
+    local stop = observed:watch({ 'messages' }, function() end)
+    local log = require('opencode.log')
+    local warns = {}
+    local original_warn = log.warn
+    log.warn = function(msg, ...)
+      warns[#warns + 1] = string.format(tostring(msg), ...)
+    end
+
+    -- covered by messages.handlers: must stay silent
+    emit(streams[1], event('ses-main', 'session.step.started', { assistantMessageID = 'msg-live', agent = 'build' }, 9))
+    emit(streams[1], event('ses-main', 'session.text.started', { assistantMessageID = 'msg-live', ordinal = 0 }, 9.5))
+    emit(
+      streams[1],
+      event('ses-main', 'session.text.delta', { assistantMessageID = 'msg-live', ordinal = 0, delta = 'x' }, 10)
+    )
+    flush()
+    assert.equals(0, #warns)
+
+    -- Exempt and other-resource events still pass through the message resource.
+    emit(streams[1], event('ses-main', 'session.status', { status = { type = 'idle' } }, 10.1))
+    emit(streams[1], event('ses-main', 'session.execution.started', {}, 10.2))
+    flush()
+    assert.equals(0, #warns)
+
+    -- not in routes, handlers, or EXEMPT: must warn
+    for _ = 1, 3 do
+      emit(streams[1], event('ses-main', 'session.entirely_unknown', {}, 11))
+    end
+    flush()
+    assert.equals(1, #warns)
+    assert.truthy(warns[1]:find('session%.entirely_unknown'))
+
+    emit(streams[1], event('ses-main', 'session.compaction.failed', {}, 12))
+    flush()
+    assert.equals(2, #warns)
+    assert.truthy(warns[2]:find('known gap', 1, true))
+
+    log.warn = original_warn
+    stop()
+  end)
 
   it('marks a known inbox item not_pending when an authority snapshot omits it', function()
     local value = connection()

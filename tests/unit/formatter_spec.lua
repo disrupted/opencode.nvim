@@ -48,11 +48,34 @@ describe('formatter', function()
         },
       },
       time = { started = 1, completed = 2 },
+      result = { { kind = 'text', text = 'Duplicate raw answer' } },
     })
 
     local output = formatter.format_part(part, message, true)
     assert.are.equal('**A1:** First line', output.lines[4])
     assert.are.equal('Second line', output.lines[5])
+    assert.is_nil(table.concat(output.lines, '\n'):find('Duplicate raw answer', 1, true))
+  end)
+
+  it('does not render question results before completion', function()
+    local part = tool('question', {
+      state = 'running',
+      answer_text = 'Not finished yet',
+    })
+    local output = formatter.format_part(part, assistant(), true)
+    assert.is_nil(table.concat(output.lines, '\n'):find('Not finished yet', 1, true))
+  end)
+
+  it('renders normalized plain question replies', function()
+    local part = tool('question', { answer_text = 'First reply\nSecond reply' })
+    local output = formatter.format_part(part, assistant(), true)
+    assert.is_truthy(table.concat(output.lines, '\n'):find('First reply\nSecond reply', 1, true))
+  end)
+
+  it('does not interpret raw question tool results', function()
+    local part = tool('question', { result = { { kind = 'text', text = 'Raw wire reply' } } })
+    local output = formatter.format_part(part, assistant(), true)
+    assert.is_nil(table.concat(output.lines, '\n'):find('Raw wire reply', 1, true))
   end)
 
   it('ignores unsupported message roles and part kinds without adding spacing', function()
@@ -61,11 +84,76 @@ describe('formatter', function()
     assert.same({}, formatter.format_part({ kind = 'text', text = 'hidden' }, nil).lines)
   end)
 
+  it('highlights automatically inserted review-comment references in user prompts', function()
+    local prompt = '@review-comment-1 just testing'
+    local message = {
+      id = 'msg_review_comment',
+      kind = 'user',
+      content = { { kind = 'text', text = prompt } },
+    }
+    local output = formatter.format_part(message.content[1], message, true)
+    local mention_mark
+    for _, mark in ipairs(output.extmarks[0] or {}) do
+      if mark.hl_group == 'OpencodeMention' then
+        mention_mark = mark
+        break
+      end
+    end
+
+    assert.is_not_nil(mention_mark)
+    assert.equals(0, mention_mark.start_col)
+    assert.equals(#'@review-comment-1', mention_mark.end_col)
+  end)
+
   it('preserves replacement output and actions for system display parts', function()
     local output = formatter.format_part({ kind = 'hidden_messages_display', hidden_count = 2 }, { kind = 'system' })
     assert.equals('> 2 older messages are not displayed.', output.lines[1])
     assert.equals('toggle_max_messages', output.actions[1].type)
     assert.equals(2, #output.lines)
+  end)
+
+  it('keeps the user border continuous across the separator before a selection link', function()
+    local output = formatter.format_part({
+      kind = 'editor_context',
+      source = { kind = 'selection', file_name = 'observation.lua', range = '28, 31' },
+      text = 'selected code',
+    }, { kind = 'user' }, true)
+
+    -- Each part is formatted separately; row -1 is the previous part's blank separator.
+    for _, row in ipairs({ -1, 0 }) do
+      assert.is_not_nil(output.extmarks[row])
+      assert.same({ { icons.get('border'), 'OpencodeMessageRoleUser' } }, output.extmarks[row][1].virt_text)
+    end
+    assert.is_nil(output.extmarks[1])
+  end)
+
+  it('renders system messages through their transcript description, not the payload', function()
+    local text =
+      'The available MCP server instructions have changed. This list supersedes the previous one.\n\n<mcp_instructions>\n  <server name="context7" />\n</mcp_instructions>'
+    local message = { kind = 'system', description = 'Instructions updated: core/codemode, core/mcp-guidance' }
+    local output = formatter.format_part({ kind = 'text', text = text }, message)
+
+    -- callout line + the trailing blank line format_part appends
+    assert.equals(2, #output.lines)
+    assert.truthy(output.lines[1]:find('Instructions updated: core/codemode, core/mcp%-guidance', 1))
+    assert.falsy(output.lines[1]:find('mcp_instructions', 1, true))
+    assert.equals('', output.lines[2])
+  end)
+
+  it('renders synthetic notices through their transcript description', function()
+    local message = { kind = 'synthetic', description = 'Continuing after restart' }
+    local output =
+      formatter.format_part({ kind = 'text', text = 'The server restarted while you were working.' }, message)
+
+    assert.equals(2, #output.lines)
+    assert.truthy(output.lines[1]:find('Continuing after restart', 1, true))
+  end)
+
+  it('falls back to raw text when a system message has no description', function()
+    local output = formatter.format_part({ kind = 'text', text = 'Short notice' }, { kind = 'system' })
+
+    assert.equals('Short notice', output.lines[1])
+    assert.same({}, output.fold_ranges)
   end)
 
   it('keeps final assistant errors when its part kind is unsupported', function()

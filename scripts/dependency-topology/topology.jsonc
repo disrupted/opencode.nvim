@@ -109,6 +109,7 @@
         "opencode.ui.input_window",        // input buffer management
         "opencode.ui.output_window",       // output buffer management
         "opencode.ui.output",              // output composition
+        "opencode.ui.output_spinner",      // in-place spinner extmark animation
         "opencode.ui.renderer",            // render pipeline
         "opencode.ui.renderer.*",
         "opencode.ui.render_state",        // render state tracking
@@ -134,6 +135,7 @@
         "opencode.ui.session_tab_picker",  // logical-tab picker; actions via session_runtime
         "opencode.ui.session_tab_strip",   // logical-tab strip rendering
         "opencode.ui.session_tab_notifications", // tab lifecycle notifications
+        "opencode.ui.program_status",      // terminal program status transport
         "opencode.ui.symbol_snapshot",
         "opencode.ui.inline_input",
         "opencode.ui.symbol_tokens",

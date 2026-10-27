@@ -30,7 +30,7 @@ function M.new(connection, ref)
     ---@param sync table
     ---@return boolean
     refresh_after_event = function(resource, sync)
-      return resource ~= 'files' and sync.state == 'error'
+      return resource ~= 'files' and (sync.state == 'error' or sync.state == 'stale')
     end,
     request_resource = function(current, resource)
       ---@cast current OpencodeV2Observation
@@ -53,9 +53,9 @@ function M.new(connection, ref)
     end,
     on_stream_error = actions.invalidate_submissions,
     ---@param current OpencodeObservation
-    on_close = function(current)
+    on_close = function(current, reason)
       ---@cast current OpencodeV2Observation
-      actions.invalidate_submissions(current, 'connection closed')
+      actions.invalidate_submissions(current, 'connection closed (' .. tostring(reason) .. ')')
     end,
   })
   ---@cast observation OpencodeV2Observation
@@ -68,8 +68,9 @@ function M.new(connection, ref)
 end
 
 ---@param connection OpencodeV2Connection
-function M.close(connection)
-  lifecycle.close(connection)
+---@param reason string
+function M.close(connection, reason)
+  lifecycle.close(connection, reason)
 end
 
 return M

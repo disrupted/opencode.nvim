@@ -25,6 +25,8 @@ M.prompt_controllers = {}
 ---@field render_session? OpencodeRenderSession
 ---@field render_state RenderState
 ---@field entries table[]
+---@field background_results table<string, OpencodeV2BackgroundResult>
+---@field background_tools table<string, table>
 ---@field generation integer
 ---@field closed boolean
 ---@field output_buf integer|nil
@@ -33,6 +35,7 @@ M.prompt_controllers = {}
 ---@field history_expanded boolean
 ---@field history_navigation_revision integer
 ---@field history_top_pending boolean
+---@field after_history_load {fn: fun(), revision: integer}|nil
 ---@field get_child_parts fun(session_id: string): table[]|nil
 ---@field prompt_controllers {permission?: PermissionController, question?: QuestionController}
 ---@field formatted_parts table<string, Output>
@@ -58,6 +61,7 @@ M.prompt_controllers = {}
 ---@field is_active fun(self: RendererCtx): boolean
 ---@field close fun(self: RendererCtx)
 ---@field reset fun(self: RendererCtx)
+---@field set_entries fun(self: RendererCtx, entries: table[])
 local ctx = {}
 ctx.__index = ctx
 
@@ -132,12 +136,33 @@ function ctx:reset()
   self.global_folds = {}
   self.part_folds = {}
   self.entries = {}
+  self.background_results = {}
+  self.background_tools = {}
   self.history_expanded = false
   self.history_navigation_revision = 0
   self.history_top_pending = false
+  self.after_history_load = nil
   self.file_revision = 0
   self.needs_reconcile = false
   self:bulk_reset()
+end
+
+---@param entries table[]
+function ctx:set_entries(entries)
+  self.entries = entries
+  self.background_results = {}
+  self.background_tools = {}
+  for _, entry in ipairs(entries) do
+    local result = entry.background_result
+    if result then
+      self.background_results[result.id] = result
+    end
+    for _, part in ipairs(entry.content) do
+      if part.background then
+        self.background_tools[part.background.id] = part
+      end
+    end
+  end
 end
 
 ---@param entry table

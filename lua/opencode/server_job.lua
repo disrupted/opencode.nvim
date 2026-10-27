@@ -534,7 +534,7 @@ function M.spawn_local_server(promise, port, hostname)
         end)
         :catch(function(err)
           log.notify(' Failed to start opencode server' .. vim.inspect(err), vim.log.levels.ERROR)
-          server:shutdown()
+          server:shutdown('startup probe failed')
           promise:reject(err)
         end)
     end,

@@ -17,6 +17,7 @@ M.defaults = {
     args = {},
   },
   lock_session_to_directory = false,
+  program_status = { enabled = true, tmux = false },
   server = {
     url = nil,
     port = nil,

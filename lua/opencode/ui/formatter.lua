@@ -227,6 +227,10 @@ function M.format_message_header(message, previous_message)
   end
   local output = Output.new()
 
+  if message.background_result then
+    return output
+  end
+
   if message.id == '__opencode_revert_message__' then
     output:add_lines(M.separator)
     return output
@@ -405,7 +409,7 @@ function M._format_user_prompt(output, text, message)
     end
   end
 
-  if #mentions > 0 then
+  if #mentions > 0 or text:find('@review-comment-', 1, true) then
     mention.highlight_mentions_in_output(output, text, mentions, start_line)
   end
 
@@ -416,21 +420,6 @@ end
 local function format_compaction_divider(output)
   output:add_line(compaction_divider_text)
   output:add_extmark(output:get_line_count() - 1, { line_hl_group = 'OpencodeBorder', priority = 5000 })
-end
-
----@param output Output Output object to write to
----@param part table
-function M._format_selection_context(output, part)
-  if part.kind ~= 'editor_context' or not part.source or part.source.kind ~= 'selection' then
-    return
-  end
-  local start_line = output:get_line_count() + 1
-  output:add_lines(vim.split(part.text or '', '\n'))
-  output:add_empty_line()
-
-  local end_line = output:get_line_count()
-
-  M.add_vertical_border(output, start_line, end_line, 'OpencodeMessageRoleUser', -3)
 end
 
 ---@param output Output
@@ -635,6 +624,33 @@ local function resolve_available_path(path, available_files)
     end
   end
   return match
+end
+
+---@param output Output
+---@param part table
+---@param context? FormatterContext
+function M._format_selection_context(output, part, context)
+  if part.kind ~= 'editor_context' or not part.source or part.source.kind ~= 'selection' then
+    return
+  end
+  -- Keep the full payload on the part while exposing its location for navigation.
+  local file_name = part.source.file_name or ''
+  local label = part.source.range and (file_name .. ':' .. part.source.range) or file_name
+  local text = string.format('[`%s`](%s)', label, file_name)
+  local line = output:add_line(text)
+  -- The preceding part owns the separator line, but the selection must border it.
+  M.add_vertical_border(output, line - 1, line, 'OpencodeMessageRoleUser', -3)
+  local path = resolve_available_path(file_name, available_file_set(context))
+  if path then
+    ---@type integer?
+    local target_line = tonumber(part.source.range and part.source.range:match('^(%d+)')) --[[@as integer?]]
+    output:add_target({
+      kind = 'file',
+      path = path,
+      line = target_line,
+      range = { line = line, start_col = 0, end_col = #text },
+    })
+  end
 end
 
 local function output_range_for_absolute_range(rendered, first_output_line, start_offset, end_offset)
@@ -924,8 +940,9 @@ end
 
 ---@param output Output
 ---@param part table
-local function format_editor_context(output, part)
-  M._format_selection_context(output, part)
+---@param context? FormatterContext
+local function format_editor_context(output, part, context)
+  M._format_selection_context(output, part, context)
   M._format_review_comment_context(output, part)
   M._format_cursor_data_context(output, part)
   M._format_diagnostics_context(output, part)
@@ -959,20 +976,21 @@ end
 ---@param output Output
 ---@param part table
 ---@param message table
+---@param context? FormatterContext
 ---@return Output, boolean
-local function format_user_part(output, part, message)
+local function format_user_part(output, part, message, context)
   if is_compaction_part(part) then
     format_compaction_divider(output)
     return output, true
   elseif part.kind == 'text' and type(part.text) == 'string' then
     if part.synthetic == true then
-      format_editor_context(output, part)
+      format_editor_context(output, part, context)
     else
       M._format_user_prompt(output, vim.trim(part.text), message)
       return output, true
     end
   elseif part.kind == 'editor_context' then
-    format_editor_context(output, part)
+    format_editor_context(output, part, context)
     return output, true
   elseif part.kind == 'file' then
     return output, format_user_file(output, part, message)
@@ -1006,7 +1024,15 @@ end
 ---@return Output, boolean
 local function format_system_part(output, part, message)
   if part.kind == 'text' then
-    output:add_lines(vim.split(part.text, '\n'))
+    -- The schema gives system/synthetic messages a `description` field meant
+    -- "for transcript display"; `text` is the model-facing payload (instruction
+    -- snapshots, restart context) and stays hidden while a summary exists.
+    local description = message.description
+    if format_utils.has_description(message) then
+      format_utils.format_action(output, icons.get('info'), description, '')
+      return output, true
+    end
+    output:add_lines(vim.split(part.text or '', '\n'))
     return output, true
   elseif system_formatters.format(part.kind, output) then
     return output, true
@@ -1058,6 +1084,35 @@ local function format_shell_part(output, part)
     return output, true
   end
   return output, false
+end
+
+---@param output Output
+---@param _part table
+---@param message table
+---@param context? FormatterContext
+---@return Output, boolean
+local function format_background_completion(output, _part, message, context)
+  local result = message.background_result
+  if not result then
+    return output, false
+  end
+  local tool = context and context.get_background_tool and context.get_background_tool(result.id)
+  local input = tool and tool.input
+  local label, failed = format_utils.background_outcome(result)
+  local agent = input and (input.agent or input.subagent_type)
+  local name = result.source == 'shell' and 'Shell' or (agent or result.agent or 'Subagent')
+  name = name:gsub('(%a)([%w_]*)', function(first, rest)
+    return first:upper() .. rest
+  end)
+  local title = '↳ ' .. name .. (failed and (' ' .. label) or ' finished')
+  local detail = input and (input.description or input.command) or result.id
+  output:add_line(title .. ' · ' .. detail:gsub('[\r\n]', ' '))
+  output:add_extmark(0, {
+    start_col = 0,
+    end_col = #title,
+    hl_group = failed and 'DiagnosticError' or 'DiagnosticOk',
+  })
+  return output, true
 end
 
 local compaction_statuses = {
@@ -1127,6 +1182,21 @@ local function format_location_part(output, part)
   return output, false
 end
 
+---@param output Output
+---@param part table
+---@param message table
+---@param context? FormatterContext
+---@return Output, boolean
+local function format_synthetic_part(output, part, message, context)
+  if message.background_result then
+    return format_background_completion(output, part, message, context)
+  end
+  if not format_utils.has_description(message) then
+    return output, false
+  end
+  return format_system_part(output, part, message)
+end
+
 ---@alias MessagePartFormatter fun(output: Output, part: table, message: table, context?: FormatterContext): Output, boolean
 
 ---@type table<string, MessagePartFormatter?>
@@ -1136,6 +1206,7 @@ local part_formatters = {
   system = format_system_part,
   skill = format_skill_part,
   shell = format_shell_part,
+  synthetic = format_synthetic_part,
   compaction = format_compaction_part,
   ['location-switched'] = format_location_part,
 }

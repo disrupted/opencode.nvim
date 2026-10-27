@@ -59,6 +59,34 @@ local function event(session_id, kind, data, created)
 end
 
 describe('V2 protocol Observation interpretation', function()
+  it('normalizes completed question text into the shared reply contract', function()
+    local native = assistant('msg-question')
+    native.content = {
+      {
+        type = 'tool',
+        id = 'call-question',
+        name = 'question',
+        time = { created = 1 },
+        state = {
+          status = 'completed',
+          input = {},
+          content = {
+            { type = 'text', text = 'First reply' },
+            { type = 'file', uri = 'file:///tmp/reply.txt', mime = 'text/plain' },
+            { type = 'text', text = 'Second reply\nMore detail' },
+          },
+        },
+      },
+    }
+    local normalize = require('opencode.protocols.v2.normalize')
+    local entry = normalize.mapped_message('ses-question', native)
+    assert.equals('First reply\nSecond reply\nMore detail', entry.content[1].answer_text)
+
+    native.content[1].state = { status = 'running', input = {} }
+    entry = normalize.mapped_message('ses-question', native)
+    assert.is_nil(entry.content[1].answer_text)
+  end)
+
   it('preserves native skill attachments while preparing a message', function()
     local observed = observation('ses-skill')
     local skills = { { id = 'skill-id', mention = { start_byte = 0, end_byte = 7 } } }
@@ -87,6 +115,165 @@ describe('V2 protocol Observation interpretation', function()
     observed._start_resource = original_refresh
   end)
 
+  it('projects a background completion from the event without pulling a snapshot', function()
+    local observed = observation('ses-bg')
+    local original = observed._start_resource
+    local refreshed
+    observed._start_resource = function(_, resource)
+      refreshed = resource
+    end
+
+    local completion = event('ses-bg', 'session.synthetic', {
+      text = '<shell id="sh_1" state="completed" command="make build">\nexit 0\n</shell>',
+      metadata = { source = 'shell', shellID = 'sh_1', state = 'completed', exit = 0 },
+    })
+    assert.is_true(observation_module.ingest_event(observed, completion))
+
+    local state = observed:read()
+    assert.equals('current', state.sync.messages.state, 'projecting the completion needs no snapshot')
+    assert.equals(1, #state.entry_order)
+    local entry = state.entries_by_id[state.entry_order[1]]
+    assert.equals('sh_1', entry.background_result.id)
+    assert.equals('exit 0', entry.background_result.text)
+
+    observed:_event_changed('messages')
+    assert.is_nil(refreshed, 'the dispatch has nothing to refetch')
+
+    assert.is_true(observation_module.ingest_event(observed, completion))
+    assert.equals(1, #observed:read().entry_order, 'a redelivered completion replaces its entry')
+
+    observed._start_resource = original
+  end)
+
+  it('drops the tail a committed revert deleted without refetching', function()
+    local observed = observation('ses-revert')
+    observation_module.ingest_snapshot(observed, { assistant('msg-c'), assistant('msg-b'), assistant('msg-a') })
+    local original = observed._start_resource
+    local refreshed
+    observed._start_resource = function(_, resource)
+      refreshed = resource
+    end
+
+    assert.is_true(
+      observation_module.ingest_event(observed, event('ses-revert', 'session.revert.committed', { to = 'msg-b' }))
+    )
+
+    local state = observed:read()
+    assert.same({ 'msg-a' }, state.entry_order, 'the boundary message is deleted too')
+    assert.is_nil(state.entries_by_id['msg-c'])
+    assert.equals('current', state.sync.messages.state)
+    assert.is_nil(refreshed, 'a known tail needs no snapshot')
+
+    observed._start_resource = original
+  end)
+
+  it('asks for the snapshot when the revert boundary was never loaded', function()
+    local observed = observation('ses-revert')
+    observation_module.ingest_snapshot(observed, { assistant('msg-a') })
+    local original = observed._start_resource
+    local refreshed
+    observed._start_resource = function(_, resource)
+      refreshed = resource
+    end
+
+    assert.is_true(
+      observation_module.ingest_event(
+        observed,
+        event('ses-revert', 'session.revert.committed', { to = 'msg-before-the-window' })
+      )
+    )
+    assert.equals('stale', observed:read().sync.messages.state)
+
+    observed:_event_changed('messages')
+    assert.equals('messages', refreshed, 'only a snapshot can say what the deletion took')
+
+    observed._start_resource = original
+  end)
+
+  it('records background completions steered through the inbox of a busy session', function()
+    local observed = observation('ses-bg')
+    observation_module.ingest_snapshot(observed, {
+      {
+        id = 'msg-assistant',
+        type = 'assistant',
+        agent = 'build',
+        model = { providerID = 'provider', id = 'model' },
+        time = { created = 200 },
+        content = {
+          {
+            type = 'tool',
+            id = 'call-shell',
+            name = 'shell',
+            executed = true,
+            time = { created = 201 },
+            state = {
+              status = 'completed',
+              input = { command = 'make build', background = true },
+              metadata = { status = 'running', truncated = false, shellID = 'sh_1' },
+              content = {},
+            },
+          },
+        },
+      },
+    })
+    local background_tasks = require('opencode.services.background_tasks')
+    assert.equals(1, background_tasks.count_observed(observed).shells)
+
+    assert.is_true(observation_module.ingest_event(
+      observed,
+      event('ses-bg', 'session.inbox.enqueued', {
+        inboxID = 'msg-completion',
+        item = {
+          type = 'synthetic',
+          payload = {
+            text = '<shell id="sh_1" state="completed" command="make build">\nbuilt\n</shell>',
+            description = 'make build',
+            metadata = { source = 'shell', shellID = 'sh_1', jobID = 'sh_1', state = 'completed', exit = 0 },
+          },
+          delivery = 'steer',
+        },
+      })
+    ))
+
+    local completion = observed:read().entries_by_id['msg-completion']
+    assert.equals('sh_1', completion.background_result.id)
+    assert.equals('built', completion.background_result.text)
+    assert.equals(0, background_tasks.count_observed(observed).total)
+  end)
+
+  it('ignores inbox synthetic items that are not background completions', function()
+    local observed = observation('ses-bg')
+
+    assert.is_false(observation_module.ingest_event(
+      observed,
+      event('ses-bg', 'session.inbox.enqueued', {
+        inboxID = 'msg-context',
+        item = { type = 'synthetic', payload = { text = 'embedded context', metadata = { source = 'acp' } } },
+      })
+    ))
+    assert.is_nil(observed:read().entries_by_id['msg-context'])
+  end)
+
+  it('ignores synthetic messages that are not background completions', function()
+    local observed = observation('ses-bg')
+    local original = observed._start_resource
+    local refreshed
+    observed._start_resource = function(_, resource)
+      refreshed = resource
+    end
+
+    assert.is_false(observation_module.ingest_event(
+      observed,
+      event('ses-bg', 'session.synthetic', {
+        text = 'embedded context',
+        metadata = { source = 'acp' },
+      })
+    ))
+    assert.is_nil(refreshed)
+
+    observed._start_resource = original
+  end)
+
   it('validates a complete snapshot before replacing existing entries', function()
     local observed = observation('ses-target')
     local message = assistant('msg-assistant')
@@ -111,6 +298,17 @@ describe('V2 protocol Observation interpretation', function()
     observation_module.ingest_snapshot(observed, { replacement })
     assert.equals(entry, state.entries_by_id['msg-assistant'])
     assert.equals(99, entry.cost)
+  end)
+
+  it('rejects a message id with a colon, which would make synthesized part ids ambiguous', function()
+    local observed = observation('ses-target')
+    observation_module.ingest_snapshot(observed, { assistant('msg-assistant') })
+
+    local ok, err = pcall(observation_module.ingest_snapshot, observed, { assistant('msg:collide') })
+
+    assert.is_false(ok)
+    assert.matches('message id must not contain', tostring(err))
+    assert.same({ 'msg-assistant' }, observed:read().entry_order)
   end)
 
   it('projects newest-first native snapshots into chronological frozen facts', function()
@@ -453,6 +651,43 @@ describe('V2 protocol Observation interpretation', function()
     assert.same({ 'msg-user' }, observed:read().entry_order)
     assert.equals('user', observed:read().entries_by_id['msg-user'].kind)
     assert.equals('from another client', observed:read().entries_by_id['msg-user'].content[1].text)
+  end)
+
+  it('projects restart and instruction notices into messages', function()
+    local observed = observation('ses-notice')
+
+    local restart = event('ses-notice', 'session.synthetic', {
+      text = 'The server restarted while you were working.',
+      description = 'Continuing after restart',
+    }, 100)
+    restart.id = 'evt_restart'
+    assert.is_true(observation_module.ingest_event(observed, restart))
+
+    local instructions = event('ses-notice', 'session.instructions.updated', {
+      delta = { ['core/mcp-guidance'] = 'hash-b', ['core/codemode'] = 'hash-a' },
+      text = 'The available MCP server instructions have changed.',
+    }, 101)
+    instructions.id = 'evt_instructions'
+    assert.is_true(observation_module.ingest_event(observed, instructions))
+
+    local state = observed:read()
+    assert.same({ 'msg_restart', 'msg_instructions' }, state.entry_order)
+    local synthetic = state.entries_by_id['msg_restart']
+    assert.equals('synthetic', synthetic.kind)
+    assert.equals('Continuing after restart', synthetic.description)
+    assert.equals('The server restarted while you were working.', synthetic.content[1].text)
+    local system = state.entries_by_id['msg_instructions']
+    assert.equals('system', system.kind)
+    assert.equals('Instructions updated: core/codemode, core/mcp-guidance', system.description)
+  end)
+
+  it('ignores instruction updates that carry no rendered text', function()
+    local observed = observation('ses-notice')
+    local baseline = event('ses-notice', 'session.instructions.updated', {
+      delta = { ['core/codemode'] = 'hash-a' },
+    }, 100)
+    assert.is_false(observation_module.ingest_event(observed, baseline))
+    assert.same({}, observed:read().entry_order)
   end)
 
   it('applies native text, reasoning, and tool lifecycles with synthesized identities', function()

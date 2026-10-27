@@ -2,6 +2,7 @@ local state = require('opencode.state')
 local config = require('opencode.config')
 local output_window = require('opencode.ui.output_window')
 local reference_facts = require('opencode.ui.reference_facts')
+local formatter_utils = require('opencode.ui.formatter.utils')
 local contexts = require('opencode.ui.renderer.ctx')
 local RenderSession = require('opencode.ui.renderer.session')
 local flush = require('opencode.ui.renderer.flush')
@@ -67,7 +68,12 @@ end
 ---@param message table
 ---@return boolean
 local function is_non_conversation_record(message)
-  return message.kind == 'agent-switched' or message.kind == 'model-switched' or message.kind == 'synthetic'
+  -- A synthetic message is transcript-visible through its `description` (the
+  -- schema's summary field) or a background result; otherwise its text is
+  -- model-facing payload.
+  return message.kind == 'agent-switched'
+    or message.kind == 'model-switched'
+    or (message.kind == 'synthetic' and not formatter_utils.has_description(message) and not message.background_result)
 end
 
 ---@param message table|nil
@@ -504,7 +510,7 @@ local function read_conversation(ctx, observation)
   local sync = observed.sync or {}
   local synced_session = sync.session and sync.session.state == 'current' and observed.session or nil
   local entries = ordered_entries(observation)
-  ctx.entries = entries
+  ctx:set_entries(entries)
   update_observation_stats(observation)
   return synced_session or { id = state.active_session and state.active_session.id }, entries
 end
@@ -817,7 +823,7 @@ local function grow_window_with_older_page(ctx)
     if #ordered_entries(observation) <= entries_before then
       return
     end
-    ctx.entries = ordered_entries(observation)
+    ctx:set_entries(ordered_entries(observation))
     if not apply_window_growth(ctx, window_before + get_initial_render_count()) then
       -- the window already covered everything cached: drop the window limit
       -- so the merged prefix renders, without pulling more pages
@@ -828,6 +834,16 @@ local function grow_window_with_older_page(ctx)
     M.restore_top_anchor(anchor, ctx)
   end, notify_history_failure)
   return true
+end
+
+---Drop the pending navigation callback once the scroll target it was registered
+---under is gone.
+---@param ctx RendererCtx
+local function drop_stale_callback(ctx)
+  local pending = ctx.after_history_load
+  if pending and pending.revision ~= ctx.history_navigation_revision then
+    ctx.after_history_load = nil
+  end
 end
 
 ---Pull the complete remaining history and render all of it.
@@ -850,6 +866,7 @@ local function load_complete_history(ctx, scroll_to_top)
   end
   request
     :and_then(function()
+      drop_stale_callback(ctx)
       if
         not ctx:is_active()
         or ctx.observation ~= observation
@@ -859,15 +876,21 @@ local function load_complete_history(ctx, scroll_to_top)
       end
       -- grow to the merged total only; the rendering primitive does not
       -- touch the protocol, so this callback cannot re-enter the pull
-      ctx.entries = ordered_entries(observation)
+      ctx:set_entries(ordered_entries(observation))
       apply_window_growth(ctx, math.huge)
       if scroll_to_top and win and vim.api.nvim_win_is_valid(win) then
         pcall(vim.api.nvim_win_set_cursor, win, { 1, 0 })
         pcall(output_window.restore_view_topline, win, 1)
       end
       ctx.history_top_pending = false
+      local after_load = ctx.after_history_load
+      ctx.after_history_load = nil
+      if after_load then
+        after_load.fn()
+      end
     end)
     :catch(function(err)
+      drop_stale_callback(ctx)
       if ctx.history_navigation_revision == navigation_revision then
         ctx.history_top_pending = false
       end
@@ -951,7 +974,7 @@ function M._render_full_session_data(entries, session, ctx, opts)
   if ctx.observation then
     update_observation_stats(ctx.observation)
   end
-  ctx.entries = entries or {}
+  ctx:set_entries(entries or {})
   session = session or current_session(ctx)
   reference_facts.rebuild(session.id, ctx.entries, session.location)
   local visible_messages, hidden_count = get_visible_session_messages(ctx.entries, session, ctx)
@@ -1037,7 +1060,8 @@ end
 
 ---Load all remaining messages and re-render.
 ---Used for navigation and search; by default, gg lands at the true top.
----@return boolean Whether any messages were loaded
+---@return boolean loaded Whether any messages were loaded
+---@return boolean started Whether a complete-history pull was started
 ---@param ctx? RendererCtx
 ---@param opts? {scroll_to_top?: boolean}
 function M.load_all_messages(ctx, opts)
@@ -1063,7 +1087,16 @@ function M.load_all_messages(ctx, opts)
   if not loading then
     ctx.history_top_pending = false
   end
-  return loading or expanded
+  return loading or expanded, loading
+end
+
+---Run `fn` when the complete-history pull in flight lands; a later `gg` drops it
+---instead of running it under a different scroll target.
+---@param fn fun()
+---@param ctx? RendererCtx
+function M.after_history_load(fn, ctx)
+  ctx = ctx or contexts.current()
+  ctx.after_history_load = { fn = fn, revision = ctx.history_navigation_revision }
 end
 
 ---Render the currently observed state synchronously; this does not load history.
